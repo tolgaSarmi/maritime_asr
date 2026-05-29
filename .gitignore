@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+venv/
+.venv/
+env/
+
+# Local configuration / secrets
+.env
+*.env
+
+# Data, outputs, and model artifacts
+data/
+checkpoints/
+results/
+runs/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# OS / editor files
+.DS_Store
+.vscode/
+.idea/
