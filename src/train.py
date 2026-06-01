@@ -1,0 +1,448 @@
+"""
+src/train.py
+══════════════════════════════════════════════════════════════════════════════
+Training module for all experiments.
+
+Supports three PEFT strategies (improved over last year):
+  • encoder_freezing  – freeze acoustic encoder, train decoder only
+  • lora              – FIXED: no quantisation, expanded target_modules,
+                        systematic LR, proper early stopping patience
+  • full_finetuning   – NEW: full weight update (viable with larger dataset)
+
+Models supported:
+  • OpenAI Whisper (small / medium / large)
+  • Facebook Wav2Vec2
+══════════════════════════════════════════════════════════════════════════════
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+import torch
+from transformers import (
+    EarlyStoppingCallback,
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments,
+    Trainer,
+    TrainingArguments,
+    WhisperFeatureExtractor,
+    WhisperForConditionalGeneration,
+    WhisperProcessor,
+    WhisperTokenizer,
+    Wav2Vec2ForCTC,
+    Wav2Vec2Processor,
+)
+
+from src.dataset import (
+    WhisperASRDataset,
+    Wav2Vec2ASRDataset,
+    WhisperDataCollator,
+    Wav2Vec2DataCollator,
+)
+from src.metrics import compute_wer, compute_cer
+from src.utils import count_parameters, format_number, set_seed
+
+log = logging.getLogger(__name__)
+
+
+# ─── Model Loaders ───────────────────────────────────────────────────────────
+
+def load_whisper(model_name: str, language: str = "english"):
+    log.info("Loading Whisper: %s", model_name)
+    processor = WhisperProcessor.from_pretrained(
+        model_name, language=language, task="transcribe"
+    )
+    model = WhisperForConditionalGeneration.from_pretrained(model_name)
+    model.config.forced_decoder_ids = None
+    model.config.suppress_tokens = []
+    params = count_parameters(model)
+    log.info(
+        "  total=%s  trainable=%s",
+        format_number(params["total"]),
+        format_number(params["trainable"]),
+    )
+    return model, processor
+
+
+def load_wav2vec2(model_name: str, cfg: Any):
+    log.info("Loading Wav2Vec2: %s", model_name)
+    processor = Wav2Vec2Processor.from_pretrained(model_name)
+    w2v = cfg.models.wav2vec2
+    model = Wav2Vec2ForCTC.from_pretrained(
+        model_name,
+        ctc_loss_reduction="mean",
+        pad_token_id=processor.tokenizer.pad_token_id,
+        attention_dropout=w2v.attention_dropout,
+        hidden_dropout=w2v.hidden_dropout,
+        feat_proj_dropout=w2v.feat_proj_dropout,
+        mask_time_prob=w2v.mask_time_prob,
+        layerdrop=w2v.layerdrop,
+    )
+    model.freeze_feature_encoder()
+    params = count_parameters(model)
+    log.info(
+        "  total=%s  trainable=%s  (feature encoder frozen)",
+        format_number(params["total"]),
+        format_number(params["trainable"]),
+    )
+    return model, processor
+
+
+# ─── PEFT: Apply Methods ─────────────────────────────────────────────────────
+
+def apply_encoder_freezing_whisper(model) -> None:
+    """Freeze Whisper encoder; only decoder trains."""
+    for param in model.model.encoder.parameters():
+        param.requires_grad = False
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    log.info(
+        "Encoder frozen — trainable: %s / %s (%.1f%%)",
+        format_number(trainable), format_number(total),
+        100 * trainable / total,
+    )
+
+
+def apply_encoder_freezing_wav2vec2(model) -> None:
+    """Freeze Wav2Vec2 encoder layers; only CTC head trains."""
+    for param in model.wav2vec2.encoder.parameters():
+        param.requires_grad = False
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    log.info(
+        "Wav2Vec2 encoder frozen — trainable: %s / %s (%.1f%%)",
+        format_number(trainable), format_number(total),
+        100 * trainable / total,
+    )
+
+
+def apply_lora_whisper(model, cfg: Any):
+    """
+    Apply LoRA to Whisper.
+
+    KEY FIXES over last year:
+      1. No 8-bit quantisation — caused instability with small datasets
+      2. Expanded target_modules: q/k/v/out instead of just q/v
+      3. Learning rate set to 1e-3 (empirically validated last year)
+    """
+    from peft import LoraConfig, get_peft_model
+
+    lora_cfg = cfg.peft.lora
+    config = LoraConfig(
+        r=lora_cfg.r,
+        lora_alpha=lora_cfg.lora_alpha,
+        target_modules=list(lora_cfg.target_modules),
+        lora_dropout=lora_cfg.lora_dropout,
+        bias=lora_cfg.bias,
+    )
+    model = get_peft_model(model, config)
+    model.print_trainable_parameters()
+    return model
+
+
+def apply_lora_wav2vec2(model, cfg: Any):
+    """Apply LoRA to Wav2Vec2 attention layers."""
+    from peft import LoraConfig, get_peft_model
+
+    lora_cfg = cfg.peft.lora
+    config = LoraConfig(
+        r=lora_cfg.r,
+        lora_alpha=lora_cfg.lora_alpha,
+        target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+        lora_dropout=lora_cfg.lora_dropout,
+        bias=lora_cfg.bias,
+    )
+    model = get_peft_model(model, config)
+    model.print_trainable_parameters()
+    return model
+
+
+# ─── Dataset Helpers ─────────────────────────────────────────────────────────
+
+def _manifest_paths(data_type: str) -> tuple[str, str, str]:
+    """Return (train, val, data_root) paths for a given data_type."""
+    base = f"data/{data_type}" if data_type != "combined" else "data/combined"
+    return (
+        f"{base}/train_manifest.json",
+        f"{base}/val_manifest.json",
+        base,
+    )
+
+
+def _build_whisper_datasets(data_type: str, processor: Any, cfg: Any):
+    train_m, val_m, root = _manifest_paths(data_type)
+    common = dict(
+        data_root=root,
+        feature_extractor=processor.feature_extractor,
+        tokenizer=processor.tokenizer,
+        max_duration=cfg.data.max_duration,
+        min_duration=cfg.data.min_duration,
+        normalize=cfg.data.normalize_audio,
+    )
+    train_ds = WhisperASRDataset(train_m, split="train", **common)
+    val_ds = WhisperASRDataset(val_m, split="val", **common)
+    return train_ds, val_ds
+
+
+def _build_wav2vec2_datasets(data_type: str, processor: Any, cfg: Any):
+    train_m, val_m, root = _manifest_paths(data_type)
+    common = dict(
+        data_root=root,
+        processor=processor,
+        max_duration=cfg.data.max_duration,
+        min_duration=cfg.data.min_duration,
+        normalize=cfg.data.normalize_audio,
+    )
+    train_ds = Wav2Vec2ASRDataset(train_m, split="train", **common)
+    val_ds = Wav2Vec2ASRDataset(val_m, split="val", **common)
+    return train_ds, val_ds
+
+
+# ─── Shared Training Args Builder ────────────────────────────────────────────
+
+def _whisper_training_args(
+    output_dir: str,
+    learning_rate: float,
+    cfg: Any,
+    is_seq2seq: bool = True,
+) -> Seq2SeqTrainingArguments | TrainingArguments:
+    tc = cfg.training
+    base = dict(
+        output_dir=output_dir,
+        per_device_train_batch_size=tc.per_device_train_batch_size,
+        per_device_eval_batch_size=tc.per_device_eval_batch_size,
+        gradient_accumulation_steps=tc.gradient_accumulation_steps,
+        learning_rate=learning_rate,
+        warmup_steps=tc.warmup_steps,
+        weight_decay=tc.weight_decay,
+        max_grad_norm=tc.max_grad_norm,
+        num_train_epochs=tc.num_train_epochs,
+        lr_scheduler_type=tc.lr_scheduler_type,
+        fp16=tc.fp16 and torch.cuda.is_available(),
+        eval_strategy=tc.evaluation_strategy,
+        eval_steps=tc.eval_steps,
+        save_strategy=tc.save_strategy,
+        save_steps=tc.save_steps,
+        save_total_limit=tc.save_total_limit,
+        load_best_model_at_end=tc.load_best_model_at_end,
+        metric_for_best_model=tc.metric_for_best_model,
+        greater_is_better=tc.greater_is_better,
+        logging_steps=tc.logging_steps,
+        logging_dir=str(Path(tc.logging_dir) / Path(output_dir).name),
+        report_to=list(tc.report_to),
+        remove_unused_columns=False,
+        label_names=["labels"],
+        push_to_hub=False,
+        group_by_length=True,
+        dataloader_num_workers=4,
+    )
+    if is_seq2seq:
+        return Seq2SeqTrainingArguments(
+            **base,
+            predict_with_generate=True,
+            generation_max_length=128,
+        )
+    return TrainingArguments(**base)
+
+
+# ─── Whisper Trainer ─────────────────────────────────────────────────────────
+
+class WhisperTrainer:
+    """
+    Handles all three training methods for Whisper:
+      encoder_freezing | lora | full_finetuning
+    """
+
+    def __init__(self, cfg: Any, experiment: dict):
+        self.cfg = cfg
+        self.experiment = experiment
+        self.exp_name = experiment["name"]
+        self.method = experiment["method"]
+        self.model_size = experiment["model_size"]
+        self.data_type = experiment.get("train_data", "real")
+        self.output_dir = str(Path(cfg.training.output_dir) / self.exp_name)
+
+        set_seed(cfg.data.random_seed)
+
+    def train(self) -> dict:
+        log.info("═" * 60)
+        log.info("Experiment : %s", self.exp_name)
+        log.info("Method     : %s", self.method)
+        log.info("Model      : %s", self.model_size)
+        log.info("Data       : %s", self.data_type)
+        log.info("═" * 60)
+
+        model, processor = load_whisper(
+            self.model_size, self.cfg.models.whisper.language
+        )
+
+        # Apply training method
+        if self.method == "encoder_freezing":
+            apply_encoder_freezing_whisper(model)
+            lr = self.cfg.peft.encoder_freezing.learning_rate
+
+        elif self.method == "lora":
+            model = apply_lora_whisper(model, self.cfg)
+            lr = self.cfg.peft.lora.learning_rate
+
+        elif self.method == "full_finetuning":
+            # All parameters trainable — no freezing
+            lr = self.cfg.peft.full_finetuning.learning_rate
+            log.info(
+                "Full fine-tuning — all %s parameters trainable",
+                format_number(sum(p.numel() for p in model.parameters())),
+            )
+        else:
+            raise ValueError(f"Unknown method: {self.method}")
+
+        train_ds, val_ds = _build_whisper_datasets(
+            self.data_type, processor, self.cfg
+        )
+        collator = WhisperDataCollator(tokenizer=processor.tokenizer)
+        training_args = _whisper_training_args(self.output_dir, lr, self.cfg)
+
+        # FIXED early stopping patience (5 vs last year's 3)
+        callbacks = [
+            EarlyStoppingCallback(
+                early_stopping_patience=self.cfg.training.early_stopping_patience,
+                early_stopping_threshold=self.cfg.training.early_stopping_threshold,
+            )
+        ]
+
+        def compute_metrics(eval_preds):
+            pred_ids, label_ids = eval_preds
+            label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
+            pred_str = processor.tokenizer.batch_decode(
+                pred_ids, skip_special_tokens=True
+            )
+            label_str = processor.tokenizer.batch_decode(
+                label_ids, skip_special_tokens=True
+            )
+            wer = compute_wer(label_str, pred_str)["wer"]
+            cer = compute_cer(label_str, pred_str)
+            return {"eval_wer": wer, "eval_cer": cer}
+
+        model.config.use_cache = False
+
+        trainer = Seq2SeqTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=val_ds,
+            data_collator=collator,
+            processing_class=processor,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+        )
+
+        log.info("Starting training (%d train / %d val samples)...",
+                 len(train_ds), len(val_ds))
+        result = trainer.train()
+
+        trainer.save_model(self.output_dir)
+        processor.save_pretrained(self.output_dir)
+        trainer.save_metrics("train", result.metrics)
+        trainer.save_state()
+
+        log.info(
+            "Done. train_loss=%.4f", result.metrics.get("train_loss", 0)
+        )
+        return result.metrics
+
+
+# ─── Wav2Vec2 Trainer ────────────────────────────────────────────────────────
+
+class Wav2Vec2Trainer:
+    """
+    Handles encoder_freezing and lora for Wav2Vec2.
+    """
+
+    def __init__(self, cfg: Any, experiment: dict):
+        self.cfg = cfg
+        self.experiment = experiment
+        self.exp_name = experiment["name"]
+        self.method = experiment["method"]
+        self.model_size = experiment["model_size"]
+        self.data_type = experiment.get("train_data", "real")
+        self.output_dir = str(Path(cfg.training.output_dir) / self.exp_name)
+
+        set_seed(cfg.data.random_seed)
+
+    def train(self) -> dict:
+        log.info("═" * 60)
+        log.info("Experiment : %s", self.exp_name)
+        log.info("Method     : %s", self.method)
+        log.info("Model      : %s", self.model_size)
+        log.info("Data       : %s", self.data_type)
+        log.info("═" * 60)
+
+        model, processor = load_wav2vec2(self.model_size, self.cfg)
+
+        if self.method == "encoder_freezing":
+            apply_encoder_freezing_wav2vec2(model)
+            lr = self.cfg.peft.encoder_freezing.learning_rate
+        elif self.method == "lora":
+            model = apply_lora_wav2vec2(model, self.cfg)
+            lr = self.cfg.peft.lora.learning_rate
+        else:
+            raise ValueError(f"Unknown method: {self.method}")
+
+        train_ds, val_ds = _build_wav2vec2_datasets(
+            self.data_type, processor, self.cfg
+        )
+        collator = Wav2Vec2DataCollator(processor=processor)
+        training_args = _whisper_training_args(
+            self.output_dir, lr, self.cfg, is_seq2seq=False
+        )
+        callbacks = [
+            EarlyStoppingCallback(
+                early_stopping_patience=self.cfg.training.early_stopping_patience,
+                early_stopping_threshold=self.cfg.training.early_stopping_threshold,
+            )
+        ]
+
+        def compute_metrics(eval_preds):
+            import numpy as np
+            pred_logits, label_ids = eval_preds
+            pred_ids = np.argmax(pred_logits, axis=-1)
+            label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
+            pred_str = processor.batch_decode(pred_ids)
+            label_str = processor.tokenizer.batch_decode(
+                label_ids, group_tokens=False
+            )
+            wer = compute_wer(label_str, pred_str)["wer"]
+            cer = compute_cer(label_str, pred_str)
+            return {"eval_wer": wer, "eval_cer": cer}
+
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=val_ds,
+            data_collator=collator,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+        )
+
+        result = trainer.train()
+        trainer.save_model(self.output_dir)
+        trainer.save_metrics("train", result.metrics)
+        trainer.save_state()
+
+        log.info("Done. train_loss=%.4f", result.metrics.get("train_loss", 0))
+        return result.metrics
+
+
+# ─── Factory ─────────────────────────────────────────────────────────────────
+
+def build_trainer(cfg: Any, experiment: dict) -> WhisperTrainer | Wav2Vec2Trainer:
+    model_type = experiment.get("model", "whisper")
+    if model_type == "whisper":
+        return WhisperTrainer(cfg, experiment)
+    elif model_type == "wav2vec2":
+        return Wav2Vec2Trainer(cfg, experiment)
+    raise ValueError(f"Unknown model type: {model_type!r}")

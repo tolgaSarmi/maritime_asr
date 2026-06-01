@@ -1,0 +1,323 @@
+# ============================================================
+# Maritime VHF ASR – Master Configuration
+# Improved over last year: proper splits, fixed LoRA,
+# full fine-tuning, real/sim/combined experiment matrix
+# ============================================================
+
+project:
+  name: "Maritime-VHF-ASR"
+  description: "PEFT + Full Fine-Tuning on Real and Simulated Maritime VHF Speech"
+  author: "MSc AI Dissertation"
+  version: "2.0.0"
+
+# ── Label Studio ─────────────────────────────────────────────
+label_studio:
+  url: "https://app.heartex.com"
+  api_key: ""                        # set via env: LABEL_STUDIO_API_KEY
+  projects:
+    simulated:
+      name: "sim_vhf_dataset"
+      id: null
+    real:
+      name: "Maritime_ASR_Main"
+      id: null
+  export_format: "JSON"
+  audio_download: true
+  cache_dir: "data/"
+
+# ── Data ─────────────────────────────────────────────────────
+data:
+  real_data_dir: "data/real"
+  simulated_data_dir: "data/simulated"
+  combined_data_dir: "data/combined"
+  cache_dir: "data/cache"
+  sample_rate: 16000
+  max_duration: 30.0
+  min_duration: 0.5
+  normalize_audio: true
+  # Silence removal (pydub — same settings that won last year's grid search)
+  silence_thresh_dbfs: -35
+  min_silence_len_ms: 1500
+  # Splits — FIXED vs last year: large enough val set for stable WER
+  train_ratio: 0.80
+  val_ratio: 0.10
+  test_ratio: 0.10
+  random_seed: 42
+
+# ── Models ───────────────────────────────────────────────────
+models:
+  whisper:
+    sizes:
+      - "openai/whisper-small"
+      - "openai/whisper-medium"
+      - "openai/whisper-large"
+    language: "english"
+    task: "transcribe"
+    max_new_tokens: 448
+
+  parakeet:
+    sizes:
+      - "nvidia/parakeet-tdt-0.6b-v2"
+      - "nvidia/parakeet-tdt-1.1b"
+
+  wav2vec2:
+    name: "facebook/wav2vec2-base-960h"
+    ctc_zero_infinity: true
+    attention_dropout: 0.1
+    hidden_dropout: 0.1
+    feat_proj_dropout: 0.0
+    mask_time_prob: 0.05
+    layerdrop: 0.1
+
+# ── Training ─────────────────────────────────────────────────
+training:
+  output_dir: "checkpoints"
+  num_train_epochs: 100
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 2
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_scheduler_type: "cosine"
+  warmup_steps: 10
+  fp16: true
+  evaluation_strategy: "steps"
+  eval_steps: 100
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_wer"
+  greater_is_better: false
+  logging_steps: 5
+  logging_dir: "results/logs"
+  report_to: ["tensorboard"]
+  early_stopping_patience: 5       # increased from 3 to avoid premature stop
+  early_stopping_threshold: 0.001
+
+# ── PEFT Methods ─────────────────────────────────────────────
+peft:
+  encoder_freezing:
+    learning_rate: 5.0e-5
+
+  # FIXED vs last year:
+  # - No 8-bit quantisation (causes instability with small datasets)
+  # - Expanded target_modules (last year only used q_proj + v_proj)
+  # - LR grid search: 1e-4, 5e-4, 1e-3
+  lora:
+    learning_rate: 1.0e-3           # empirically found last year
+    lr_candidates: [1.0e-4, 5.0e-4, 1.0e-3]
+    r: 32
+    lora_alpha: 64
+    target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]  # expanded
+    lora_dropout: 0.05
+    bias: "none"
+    use_quantisation: false         # disabled — fixes instability
+
+  # NEW vs last year — now viable with 3× more data
+  full_finetuning:
+    learning_rate: 1.0e-5           # lower LR for full FT to avoid forgetting
+
+# ── Evaluation ───────────────────────────────────────────────
+evaluation:
+  batch_size: 16
+  results_dir: "results"
+  metrics: ["wer", "cer"]
+
+# ── Experiments ──────────────────────────────────────────────
+# Full matrix: 3 models × 4 training strategies × 3 data conditions
+# Each experiment produces eval results on BOTH real and simulated test sets
+# to capture cross-domain generalisation
+
+experiments:
+
+  # ── BASELINES (zero-shot) ──────────────────────────────────
+  - name: "baseline_whisper_small"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "baseline"
+    train_data: null
+
+  - name: "baseline_whisper_medium"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "baseline"
+    train_data: null
+
+  - name: "baseline_whisper_large"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "baseline"
+    train_data: null
+
+  - name: "baseline_wav2vec2"
+    model: "wav2vec2"
+    model_size: "facebook/wav2vec2-base-960h"
+    method: "baseline"
+    train_data: null
+
+  # ── ENCODER FREEZING ──────────────────────────────────────
+  - name: "ef_whisper_small_real"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "encoder_freezing"
+    train_data: "real"
+
+  - name: "ef_whisper_medium_real"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "encoder_freezing"
+    train_data: "real"
+
+  - name: "ef_whisper_large_real"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "encoder_freezing"
+    train_data: "real"
+
+  - name: "ef_whisper_small_simulated"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "encoder_freezing"
+    train_data: "simulated"
+
+  - name: "ef_whisper_medium_simulated"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "encoder_freezing"
+    train_data: "simulated"
+
+  - name: "ef_whisper_large_simulated"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "encoder_freezing"
+    train_data: "simulated"
+
+  - name: "ef_whisper_small_combined"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "encoder_freezing"
+    train_data: "combined"
+
+  - name: "ef_whisper_medium_combined"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "encoder_freezing"
+    train_data: "combined"
+
+  - name: "ef_whisper_large_combined"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "encoder_freezing"
+    train_data: "combined"
+
+  # ── LoRA (FIXED) ──────────────────────────────────────────
+  - name: "lora_whisper_small_real"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "lora"
+    train_data: "real"
+
+  - name: "lora_whisper_medium_real"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "lora"
+    train_data: "real"
+
+  - name: "lora_whisper_large_real"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "lora"
+    train_data: "real"
+
+  - name: "lora_whisper_small_simulated"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "lora"
+    train_data: "simulated"
+
+  - name: "lora_whisper_medium_simulated"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "lora"
+    train_data: "simulated"
+
+  - name: "lora_whisper_large_simulated"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "lora"
+    train_data: "simulated"
+
+  - name: "lora_whisper_small_combined"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "lora"
+    train_data: "combined"
+
+  - name: "lora_whisper_medium_combined"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "lora"
+    train_data: "combined"
+
+  - name: "lora_whisper_large_combined"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "lora"
+    train_data: "combined"
+
+  # ── FULL FINE-TUNING (NEW) ────────────────────────────────
+  - name: "full_ft_whisper_small_real"
+    model: "whisper"
+    model_size: "openai/whisper-small"
+    method: "full_finetuning"
+    train_data: "real"
+
+  - name: "full_ft_whisper_medium_real"
+    model: "whisper"
+    model_size: "openai/whisper-medium"
+    method: "full_finetuning"
+    train_data: "real"
+
+  - name: "full_ft_whisper_large_real"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "full_finetuning"
+    train_data: "real"
+
+  - name: "full_ft_whisper_large_combined"
+    model: "whisper"
+    model_size: "openai/whisper-large"
+    method: "full_finetuning"
+    train_data: "combined"
+
+  # ── WAV2VEC2 (NEW MODEL) ──────────────────────────────────
+  - name: "ef_wav2vec2_real"
+    model: "wav2vec2"
+    model_size: "facebook/wav2vec2-base-960h"
+    method: "encoder_freezing"
+    train_data: "real"
+
+  - name: "ef_wav2vec2_simulated"
+    model: "wav2vec2"
+    model_size: "facebook/wav2vec2-base-960h"
+    method: "encoder_freezing"
+    train_data: "simulated"
+
+  - name: "ef_wav2vec2_combined"
+    model: "wav2vec2"
+    model_size: "facebook/wav2vec2-base-960h"
+    method: "encoder_freezing"
+    train_data: "combined"
+
+  - name: "lora_wav2vec2_real"
+    model: "wav2vec2"
+    model_size: "facebook/wav2vec2-base-960h"
+    method: "lora"
+    train_data: "real"
+
+  - name: "lora_wav2vec2_combined"
+    model: "wav2vec2"
+    model_size: "facebook/wav2vec2-base-960h"
+    method: "lora"
+    train_data: "combined"

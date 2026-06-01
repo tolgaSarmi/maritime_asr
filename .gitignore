@@ -1,0 +1,35 @@
+# Audio files (large — not committed to git)
+data/real/audio/
+data/simulated/audio/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# Checkpoints (saved to Drive, not git)
+checkpoints/
+
+# Generated results
+results/logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Mac
+.DS_Store
+
+# Secrets
+.env
+
+# Zip files
+*.zip
+
+# Temp audio cache
+/tmp/asr_audio_cache/
+.cache/
