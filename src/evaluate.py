@@ -289,22 +289,16 @@ class ExperimentEvaluator:
         # Resolve model checkpoint path
         checkpoint_dir = Path(self.cfg.training.output_dir) / exp_name
         if experiment.get("train_data") is None:
-            # Baseline: use pretrained model
-            if model_type == "whisper":
-                model_path = self.cfg.models.whisper.pretrained_name
-            else:
-                model_path = self.cfg.models.wav2vec2.pretrained_name
+            # Baseline: use pretrained model from experiment config
+            model_path = experiment["model_size"]
         else:
             model_path = str(checkpoint_dir)
             if not checkpoint_dir.exists():
                 log.warning(
                     "Checkpoint not found for '%s', falling back to pretrained.", exp_name
                 )
-                model_path = (
-                    self.cfg.models.whisper.pretrained_name
-                    if model_type == "whisper"
-                    else self.cfg.models.wav2vec2.pretrained_name
-                )
+                # Fallback to pretrained model specified in experiment
+                model_path = experiment["model_size"]
 
         # Build evaluator
         if model_type == "whisper":
