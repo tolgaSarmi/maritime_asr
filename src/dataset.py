@@ -30,7 +30,7 @@ from transformers import (
     Wav2Vec2Processor,
 )
 
-from src.preprocessing import normalize_text, preprocess_audio
+from src.preprocessing import is_url, normalize_text, preprocess_audio
 
 log = logging.getLogger(__name__)
 
@@ -146,7 +146,12 @@ class ASRDataset(Dataset):
             "duration": len(waveform) / TARGET_SR,
         }
 
-    def _resolve_path(self, audio_file: str) -> Path:
+    def _resolve_path(self, audio_file: str) -> str | Path:
+        # If it's a URL, return as-is (preprocessing.load_audio handles URLs directly)
+        if is_url(audio_file):
+            return audio_file
+
+        # Local path resolution
         p = Path(audio_file)
         if p.is_absolute() and p.exists():
             return p
