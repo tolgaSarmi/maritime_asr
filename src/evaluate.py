@@ -80,8 +80,8 @@ class WhisperEvaluator:
             task="transcribe",
         )
         self.model = WhisperForConditionalGeneration.from_pretrained(model_path)
-        self.model.config.forced_decoder_ids = None
-        self.model.config.suppress_tokens = []
+        self.model.generation_config.forced_decoder_ids = None
+        self.model.generation_config.suppress_tokens = []
         self.model.eval()
         self.model.to(self.device)
         log.info("Whisper ready on %s", self.device)

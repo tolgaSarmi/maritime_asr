@@ -55,8 +55,8 @@ class WhisperTranscriber:
             model_path, language=language, task="transcribe"
         )
         self.model = WhisperForConditionalGeneration.from_pretrained(model_path)
-        self.model.config.forced_decoder_ids = None
-        self.model.config.suppress_tokens = []
+        self.model.generation_config.forced_decoder_ids = None
+        self.model.generation_config.suppress_tokens = []
         self.model.eval().to(self.device)
 
     def transcribe(self, audio: np.ndarray, max_new_tokens: int = 448) -> str:

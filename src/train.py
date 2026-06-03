@@ -57,8 +57,8 @@ def load_whisper(model_name: str, language: str = "english"):
         model_name, language=language, task="transcribe"
     )
     model = WhisperForConditionalGeneration.from_pretrained(model_name)
-    model.config.forced_decoder_ids = None
-    model.config.suppress_tokens = []
+    model.generation_config.forced_decoder_ids = None
+    model.generation_config.suppress_tokens = []
     params = count_parameters(model)
     log.info(
         "  total=%s  trainable=%s",
