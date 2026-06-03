@@ -36,6 +36,7 @@ from transformers import (
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 from src.dataset import (
     WhisperASRDataset,
@@ -341,7 +342,15 @@ class WhisperTrainer:
 
         log.info("Starting training (%d train / %d val samples)...",
                  len(train_ds), len(val_ds))
-        result = trainer.train()
+
+        # Detect and resume from latest checkpoint if available
+        last_checkpoint = get_last_checkpoint(self.output_dir)
+        if last_checkpoint is not None:
+            log.info("Resuming from checkpoint: %s", last_checkpoint)
+            result = trainer.train(resume_from_checkpoint=last_checkpoint)
+        else:
+            log.info("No checkpoint found — starting fresh")
+            result = trainer.train()
 
         trainer.save_model(self.output_dir)
         processor.save_pretrained(self.output_dir)
@@ -428,7 +437,15 @@ class Wav2Vec2Trainer:
             callbacks=callbacks,
         )
 
-        result = trainer.train()
+        # Detect and resume from latest checkpoint if available
+        last_checkpoint = get_last_checkpoint(self.output_dir)
+        if last_checkpoint is not None:
+            log.info("Resuming from checkpoint: %s", last_checkpoint)
+            result = trainer.train(resume_from_checkpoint=last_checkpoint)
+        else:
+            log.info("No checkpoint found — starting fresh")
+            result = trainer.train()
+
         trainer.save_model(self.output_dir)
         trainer.save_metrics("train", result.metrics)
         trainer.save_state()
