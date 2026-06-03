@@ -71,7 +71,7 @@ models:
 
 # ── Training ─────────────────────────────────────────────────
 training:
-  output_dir: "checkpoints"
+  output_dir: "/content/drive/MyDrive/ASR_Dissertation/checkpoints"
   num_train_epochs: 100
   per_device_train_batch_size: 16
   per_device_eval_batch_size: 16
@@ -84,7 +84,7 @@ training:
   evaluation_strategy: "steps"
   eval_steps: 100
   save_strategy: "steps"
-  save_steps: 500
+  save_steps: 100
   save_total_limit: 3
   load_best_model_at_end: true
   metric_for_best_model: "eval_wer"
