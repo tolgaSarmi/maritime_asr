@@ -300,7 +300,8 @@ class WhisperDataCollator:
         if (labels[:, 0] == self.tokenizer.bos_token_id).all():
             labels = labels[:, 1:]
         batch["labels"] = labels
-        batch["transcriptions"] = [f["transcription"] for f in features]
+        # Note: "transcriptions" removed - metadata fields cause ValueError in model.generate()
+        # Standalone evaluators decode refs from labels instead
         return batch
 
 
@@ -331,7 +332,8 @@ class Wav2Vec2DataCollator:
             labels_batch.attention_mask.ne(1), -100
         )
         batch["labels"] = labels
-        batch["transcriptions"] = [f["transcription"] for f in features]
+        # Note: "transcriptions" removed - metadata fields cause ValueError in model.generate()
+        # Standalone evaluators decode refs from labels instead
         return batch
 
 
