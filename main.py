@@ -95,6 +95,21 @@ def mode_data(args):
     run_full_pipeline(args.config)
 
 
+def _is_completed(output_dir: Path) -> bool:
+    """Return True only when training finished and metrics were written."""
+    return (output_dir / "train_results.json").exists()
+
+
+def _has_checkpoint(output_dir: Path) -> bool:
+    """Return True when at least one HuggingFace checkpoint subdirectory exists."""
+    if not output_dir.is_dir():
+        return False
+    return any(
+        d.is_dir() and d.name.startswith("checkpoint-")
+        for d in output_dir.iterdir()
+    )
+
+
 def mode_train(args):
     """Train a single experiment by name."""
     cfg = _load_cfg(args.config)
@@ -113,6 +128,15 @@ def mode_train(args):
     if experiment.get("method") == "baseline" or experiment.get("train_data") is None:
         log.info("'%s' is a baseline — skipping training.", args.experiment)
         return
+
+    exp_output_dir = Path(cfg.training.output_dir) / args.experiment
+
+    if not args.force and _is_completed(exp_output_dir):
+        print(f"SKIPPING: {args.experiment} (already completed)")
+        return
+
+    if _has_checkpoint(exp_output_dir):
+        log.info("Checkpoint found — training will resume from latest checkpoint.")
 
     from src.train import build_trainer
     trainer = build_trainer(cfg, experiment)
@@ -175,9 +199,9 @@ def mode_train_all(args):
         if exp.get("method") == "baseline" or exp.get("train_data") is None:
             continue
 
-        checkpoint = Path(cfg.training.output_dir) / exp["name"]
-        if checkpoint.exists() and not args.force:
-            log.info("Skipping '%s' — checkpoint exists. Use --force to retrain.", exp["name"])
+        exp_output_dir = Path(cfg.training.output_dir) / exp["name"]
+        if not args.force and _is_completed(exp_output_dir):
+            print(f"SKIPPING: {exp['name']} (already completed)")
             continue
 
         log.info("\n" + "═" * 60)

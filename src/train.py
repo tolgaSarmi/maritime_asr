@@ -238,7 +238,7 @@ def _whisper_training_args(
         remove_unused_columns=False,
         label_names=["labels"],
         push_to_hub=False,
-        dataloader_num_workers=4,
+        dataloader_num_workers=getattr(tc, "dataloader_num_workers", 2),
     )
     if is_seq2seq:
         return Seq2SeqTrainingArguments(
