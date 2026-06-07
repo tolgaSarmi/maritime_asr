@@ -238,7 +238,6 @@ def _whisper_training_args(
         remove_unused_columns=False,
         label_names=["labels"],
         push_to_hub=False,
-        group_by_length=True,
         dataloader_num_workers=4,
     )
     if is_seq2seq:
