@@ -73,9 +73,9 @@ models:
 training:
   output_dir: "/content/drive/MyDrive/ASR_Dissertation/checkpoints"
   num_train_epochs: 100
-  per_device_train_batch_size: 8
-  per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 4
+  per_device_train_batch_size: 4   # halved for lower GPU memory; effective batch = 4×8 = 32
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8   # doubled to preserve effective batch size of 32
   dataloader_num_workers: 2
   weight_decay: 0.01
   max_grad_norm: 1.0
@@ -85,8 +85,8 @@ training:
   evaluation_strategy: "steps"
   eval_steps: 100
   save_strategy: "steps"
-  save_steps: 100
-  save_total_limit: 3
+  save_steps: 200                   # halves checkpoint write frequency vs 100
+  save_total_limit: 2               # keeps 2 checkpoints on Drive instead of 3
   load_best_model_at_end: true
   metric_for_best_model: "eval_wer"
   greater_is_better: false
