@@ -91,6 +91,12 @@ def load_wav2vec2(model_name: str, cfg: Any):
         format_number(params["total"]),
         format_number(params["trainable"]),
     )
+    # Confirm ctc_zero_infinity landed in the model config (not just the arg)
+    log.info(
+        "  [DEBUG] cfg.ctc_zero_infinity=%s  model.config.ctc_zero_infinity=%s",
+        w2v.ctc_zero_infinity,
+        model.config.ctc_zero_infinity,
+    )
     return model, processor
 
 
@@ -115,10 +121,17 @@ def apply_encoder_freezing_wav2vec2(model) -> None:
         param.requires_grad = False
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
+    trainable_groups = sorted({
+        ".".join(n.split(".")[:2])
+        for n, p in model.named_parameters()
+        if p.requires_grad
+    })
     log.info(
-        "Wav2Vec2 encoder frozen — trainable: %s / %s (%.1f%%)",
+        "Wav2Vec2 encoder frozen — trainable: %s / %s (%.1f%%)\n"
+        "  [DEBUG] Trainable groups: %s",
         format_number(trainable), format_number(total),
         100 * trainable / total,
+        trainable_groups,
     )
 
 
@@ -384,6 +397,50 @@ class WhisperTrainer:
         return result.metrics
 
 
+# ─── Wav2Vec2 Debug Trainer ──────────────────────────────────────────────────
+
+class _Wav2Vec2DebugTrainer(Trainer):
+    """
+    Thin Trainer subclass that prints raw (unscaled) CTC loss and label
+    statistics for the first few training steps.
+
+    This reveals whether loss=0 in Trainer logs is caused by:
+      (a) a genuinely zero CTC loss (degenerate labels / all -100), or
+      (b) a GradScaler collapse where the real loss is finite but fp16
+          gradient overflow drives the logged value to ~0.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._dbg_steps = 0
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        result = super().compute_loss(
+            model, inputs, return_outputs=return_outputs, **kwargs
+        )
+        loss = result[0] if return_outputs else result
+
+        if self._dbg_steps < 5:
+            self._dbg_steps += 1
+            labels = inputs.get("labels")
+            n_minus100 = int((labels == -100).sum()) if labels is not None else -1
+            n_valid = int((labels != -100).sum()) if labels is not None else -1
+            iv = inputs.get("input_values")
+            iv_shape = tuple(iv.shape) if iv is not None else None
+            loss_val = loss.item()
+            is_finite = torch.isfinite(loss).item()
+            print(
+                f"\n=== [W2V DEBUG] Training step {self._dbg_steps} ===\n"
+                f"  raw_loss        = {loss_val:.6f}  "
+                f"finite={is_finite}  dtype={loss.dtype}\n"
+                f"  labels -100     = {n_minus100}  valid={n_valid}\n"
+                f"  input_values    shape={iv_shape}",
+                flush=True,
+            )
+
+        return result
+
+
 # ─── Wav2Vec2 Trainer ────────────────────────────────────────────────────────
 
 class Wav2Vec2Trainer:
@@ -448,7 +505,27 @@ class Wav2Vec2Trainer:
             cer = compute_cer(label_str, pred_str)
             return {"eval_wer": wer, "eval_cer": cer}
 
-        trainer = Trainer(
+        # Pre-training diagnostics
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in model.parameters())
+        trainable_names = [
+            n for n, p in model.named_parameters() if p.requires_grad
+        ]
+        print(
+            f"\n=== [W2V DEBUG] Pre-training config ===\n"
+            f"  model.config.ctc_zero_infinity = {model.config.ctc_zero_infinity}\n"
+            f"  training_args.fp16             = {training_args.fp16}\n"
+            f"  training_args.bf16             = {training_args.bf16}\n"
+            f"  trainable params               = {n_trainable:,} / {n_total:,} "
+            f"({100*n_trainable/n_total:.2f}%)\n"
+            f"  trainable param names ({len(trainable_names)} total):\n"
+            + "\n".join(f"    {n}" for n in trainable_names[:20])
+            + ("\n    ..." if len(trainable_names) > 20 else "")
+            + "\n=== [W2V DEBUG] end ===\n",
+            flush=True,
+        )
+
+        trainer = _Wav2Vec2DebugTrainer(
             model=model,
             args=training_args,
             train_dataset=train_ds,

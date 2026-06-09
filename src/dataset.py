@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,9 @@ from src.preprocessing import is_url, normalize_text, preprocess_audio
 log = logging.getLogger(__name__)
 
 TARGET_SR = 16_000
+
+# Collator debug: print first-batch label statistics once per process.
+_W2V_COLLATOR_LOGGED = False
 
 
 # ─── Base Dataset ────────────────────────────────────────────────────────────
@@ -320,6 +324,8 @@ class Wav2Vec2DataCollator:
     padding: bool = True
 
     def __call__(self, features: list[dict]) -> dict[str, torch.Tensor]:
+        global _W2V_COLLATOR_LOGGED
+
         input_vals = [{"input_values": f["input_values"]} for f in features]
         label_vals = [{"input_ids": f["labels"].tolist()} for f in features]
 
@@ -331,10 +337,45 @@ class Wav2Vec2DataCollator:
             label_vals, padding=True, return_tensors="pt"
         )
 
-        labels = labels_batch["input_ids"].masked_fill(
-            labels_batch.attention_mask.ne(1), -100
-        )
+        # Guard: attention_mask may be absent when Wav2Vec2CTCTokenizer's
+        # model_input_names omits it.  Fall back to an all-real mask so we
+        # never silently replace every label with -100.
+        if "attention_mask" in labels_batch:
+            mask = labels_batch.attention_mask.ne(1)
+        else:
+            mask = torch.zeros(
+                labels_batch["input_ids"].shape, dtype=torch.bool
+            )
+
+        labels = labels_batch["input_ids"].masked_fill(mask, -100)
         batch["labels"] = labels
+
+        if not _W2V_COLLATOR_LOGGED:
+            _W2V_COLLATOR_LOGGED = True
+            has_attn = "attention_mask" in labels_batch
+            n_invalid = (labels == -100).sum().item()
+            n_valid = (labels != -100).sum().item()
+            print("\n=== [W2V DEBUG] First collator batch ===", flush=True)
+            print(f"  batch size:              {len(features)}", flush=True)
+            print(f"  labels_batch keys:       {list(labels_batch.keys())}", flush=True)
+            print(f"  has attention_mask:      {has_attn}", flush=True)
+            if has_attn:
+                print(f"  attention_mask[0]:       {labels_batch.attention_mask[0].tolist()}", flush=True)
+            print(f"  labels shape:            {tuple(labels.shape)}", flush=True)
+            print(f"  labels -100 count:       {n_invalid}", flush=True)
+            print(f"  labels valid count:      {n_valid}", flush=True)
+            for i in range(min(2, len(features))):
+                row = labels[i]
+                valid_ids = row[row != -100].tolist()
+                try:
+                    decoded = self.processor.tokenizer.decode(valid_ids)
+                except Exception as exc:
+                    decoded = f"<decode error: {exc}>"
+                print(f"  sample {i} raw IDs:      {valid_ids}", flush=True)
+                print(f"  sample {i} decoded:      '{decoded}'", flush=True)
+                print(f"  sample {i} full row:     {row.tolist()}", flush=True)
+            print("=== [W2V DEBUG] end ===\n", flush=True)
+
         # Note: "transcriptions" removed - metadata fields cause ValueError in model.generate()
         # Standalone evaluators decode refs from labels instead
         return batch
