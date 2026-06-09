@@ -401,43 +401,160 @@ class WhisperTrainer:
 
 class _Wav2Vec2DebugTrainer(Trainer):
     """
-    Thin Trainer subclass that prints raw (unscaled) CTC loss and label
-    statistics for the first few training steps.
+    Trainer subclass that instruments the first few training steps to reveal
+    exactly where NaN enters the computation graph.
 
-    This reveals whether loss=0 in Trainer logs is caused by:
-      (a) a genuinely zero CTC loss (degenerate labels / all -100), or
-      (b) a GradScaler collapse where the real loss is finite but fp16
-          gradient overflow drives the logged value to ~0.
+    Strategy: register a forward hook on model.lm_head to capture logits
+    in-situ (with the same fp16/autocast context as real training), then
+    compute CTC input_lengths and target_lengths independently and print
+    the full pre-CTC diagnostic table.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._dbg_steps = 0
 
+    # ------------------------------------------------------------------
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        result = super().compute_loss(
+        if self._dbg_steps < 3:
+            return self._compute_loss_with_debug(
+                model, inputs, return_outputs, **kwargs
+            )
+        return super().compute_loss(
             model, inputs, return_outputs=return_outputs, **kwargs
         )
-        loss = result[0] if return_outputs else result
 
-        if self._dbg_steps < 5:
-            self._dbg_steps += 1
-            labels = inputs.get("labels")
-            n_minus100 = int((labels == -100).sum()) if labels is not None else -1
-            n_valid = int((labels != -100).sum()) if labels is not None else -1
-            iv = inputs.get("input_values")
-            iv_shape = tuple(iv.shape) if iv is not None else None
-            loss_val = loss.item()
-            is_finite = torch.isfinite(loss).item()
+    # ------------------------------------------------------------------
+    def _compute_loss_with_debug(self, model, inputs, return_outputs, **kwargs):
+        """Run the real forward pass, hooking lm_head to capture logits."""
+        captured: dict = {}
+
+        def _lm_head_hook(_module, _inp, out):
+            # Called synchronously during model.forward(); out is the logits
+            # tensor in whatever dtype autocast chose (fp16 or fp32).
+            captured["logits"] = out.detach()
+
+        # Attach hook to the CTC projection layer
+        try:
+            hook_layer = model.lm_head
+        except AttributeError:
+            # PEFT wrapper: delegate to base model
+            hook_layer = model.base_model.model.lm_head
+
+        handle = hook_layer.register_forward_hook(_lm_head_hook)
+        try:
+            result = super().compute_loss(
+                model, inputs, return_outputs=True, **kwargs
+            )
+        finally:
+            handle.remove()
+
+        loss = result[0]
+        self._dbg_steps += 1
+
+        # ── Gather tensors ────────────────────────────────────────────
+        logits = captured.get("logits")          # (B, T, vocab) or None
+        labels = inputs.get("labels")            # (B, L) with -100 padding
+        attn   = inputs.get("attention_mask")    # (B, raw_audio_len)
+
+        # input_lengths: raw audio samples → CNN output frames
+        if attn is not None:
+            try:
+                input_lengths = model._get_feat_extract_output_lengths(
+                    attn.sum(-1)
+                ).to(torch.long)
+            except AttributeError:
+                try:
+                    input_lengths = (
+                        model.base_model.model
+                        ._get_feat_extract_output_lengths(attn.sum(-1))
+                        .to(torch.long)
+                    )
+                except Exception:
+                    # Fallback: apply wav2vec2 standard CNN arithmetic
+                    raw = attn.sum(-1).float()
+                    for k, s in zip(
+                        [10, 3, 3, 3, 3, 2, 2], [5, 2, 2, 2, 2, 2, 2]
+                    ):
+                        raw = torch.floor((raw - k) / s) + 1
+                    input_lengths = raw.long()
+        elif logits is not None:
+            B, T = logits.shape[:2]
+            input_lengths = torch.full((B,), T, dtype=torch.long,
+                                       device=logits.device)
+        else:
+            input_lengths = None
+
+        # target_lengths: number of non-(-100) tokens per sample
+        if labels is not None:
+            target_lengths = (labels != -100).sum(dim=-1).to(torch.long)
+            labels_flat = labels[labels != -100]
+            unk_count = int((labels_flat == 3).sum())
+            consec_repeats = 0
+            for i in range(labels.shape[0]):
+                row = labels[i][labels[i] != -100]
+                if len(row) > 1:
+                    consec_repeats += int((row[1:] == row[:-1]).sum())
+        else:
+            target_lengths = None
+            unk_count = consec_repeats = -1
+
+        infeasible = (
+            int((target_lengths > input_lengths).sum())
+            if (target_lengths is not None and input_lengths is not None)
+            else -1
+        )
+
+        # ── Print ─────────────────────────────────────────────────────
+        print(
+            f"\n=== [W2V DEBUG] Step {self._dbg_steps} — pre-CTC diagnostics ===",
+            flush=True,
+        )
+        if logits is not None:
+            lnan = torch.isnan(logits).any().item()
+            linf = torch.isinf(logits).any().item()
+            print(f"  logits.shape:             {tuple(logits.shape)}", flush=True)
+            print(f"  logits.dtype:             {logits.dtype}", flush=True)
+            print(f"  logits nan:               {lnan}", flush=True)
+            print(f"  logits inf:               {linf}", flush=True)
+            if not lnan and not linf:
+                print(
+                    f"  logits min/max:           "
+                    f"{logits.min().item():.4f} / {logits.max().item():.4f}",
+                    flush=True,
+                )
+        else:
+            print("  logits:                   NOT CAPTURED (hook missed)", flush=True)
+
+        if input_lengths is not None:
+            print(f"  input_lengths[:10]:       {input_lengths[:10].tolist()}", flush=True)
             print(
-                f"\n=== [W2V DEBUG] Training step {self._dbg_steps} ===\n"
-                f"  raw_loss        = {loss_val:.6f}  "
-                f"finite={is_finite}  dtype={loss.dtype}\n"
-                f"  labels -100     = {n_minus100}  valid={n_valid}\n"
-                f"  input_values    shape={iv_shape}",
+                f"  input_lengths min/max:    "
+                f"{input_lengths.min().item()} / {input_lengths.max().item()}",
                 flush=True,
             )
+        if target_lengths is not None:
+            print(f"  target_lengths[:10]:      {target_lengths[:10].tolist()}", flush=True)
+            print(
+                f"  target_lengths min/max:   "
+                f"{target_lengths.min().item()} / {target_lengths.max().item()}",
+                flush=True,
+            )
+        print(
+            f"  target > input (infeasible): {infeasible}",
+            flush=True,
+        )
+        print(f"  <unk> tokens in batch:    {unk_count}", flush=True)
+        print(f"  consecutive repeats:      {consec_repeats}", flush=True)
+        print(
+            f"  loss: {loss.item():.6f}  "
+            f"finite={torch.isfinite(loss).item()}  dtype={loss.dtype}",
+            flush=True,
+        )
+        print("=== [W2V DEBUG] end ===\n", flush=True)
 
+        if not return_outputs:
+            return loss
         return result
 
 
