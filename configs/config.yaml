@@ -81,7 +81,7 @@ training:
   max_grad_norm: 1.0
   lr_scheduler_type: "cosine"
   warmup_steps: 10
-  fp16: true
+  fp16: false
   evaluation_strategy: "steps"
   eval_steps: 100
   save_strategy: "steps"
