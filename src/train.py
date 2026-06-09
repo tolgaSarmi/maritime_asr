@@ -76,6 +76,7 @@ def load_wav2vec2(model_name: str, cfg: Any):
     model = Wav2Vec2ForCTC.from_pretrained(
         model_name,
         ctc_loss_reduction="mean",
+        ctc_zero_infinity=w2v.ctc_zero_infinity,  # was silently ignored before; prevents NaN gradients on fp16 overflow
         pad_token_id=processor.tokenizer.pad_token_id,
         attention_dropout=w2v.attention_dropout,
         hidden_dropout=w2v.hidden_dropout,

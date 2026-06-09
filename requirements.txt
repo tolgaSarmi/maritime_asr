@@ -3,6 +3,7 @@ torch>=2.0.0
 torchaudio>=2.0.0
 transformers>=4.40.0
 peft>=0.10.0
+torchao>=0.16.0
 datasets>=2.18.0
 accelerate>=0.27.0
 evaluate>=0.4.0

@@ -256,8 +256,11 @@ class Wav2Vec2ASRDataset(ASRDataset):
         input_values = inputs.input_values[0]
 
         # Tokenise labels via the processor vocabulary
-        # as_target_processor() was removed in transformers 5.0; use tokenizer directly
-        labels = self.processor.tokenizer(base["labels"]).input_ids
+        # as_target_processor() was removed in transformers 5.0; use tokenizer directly.
+        # facebook/wav2vec2-base-960h vocab is uppercase-only (do_lower_case=false);
+        # normalize_text() lowercases, so we must uppercase here to avoid all-<unk> labels
+        # which produce target_lengths=0, loss=0, and NaN gradients via degenerate CTC.
+        labels = self.processor.tokenizer(base["labels"].upper()).input_ids
 
         return {
             "input_values": input_values,
