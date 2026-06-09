@@ -130,10 +130,11 @@ def apply_lora_whisper(model, cfg: Any):
       2. Expanded target_modules: q/k/v/out instead of just q/v
       3. Learning rate set to 1e-3 (empirically validated last year)
     """
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, TaskType, get_peft_model
 
     lora_cfg = cfg.peft.lora
     config = LoraConfig(
+        task_type=TaskType.SEQ_2_SEQ_LM,  # required for Seq2SeqTrainer.generate() in PEFT 0.12+
         r=lora_cfg.r,
         lora_alpha=lora_cfg.lora_alpha,
         target_modules=list(lora_cfg.target_modules),

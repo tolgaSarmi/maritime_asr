@@ -256,8 +256,8 @@ class Wav2Vec2ASRDataset(ASRDataset):
         input_values = inputs.input_values[0]
 
         # Tokenise labels via the processor vocabulary
-        with self.processor.as_target_processor():
-            labels = self.processor(base["labels"]).input_ids
+        # as_target_processor() was removed in transformers 5.0; use tokenizer directly
+        labels = self.processor.tokenizer(base["labels"]).input_ids
 
         return {
             "input_values": input_values,
@@ -323,10 +323,10 @@ class Wav2Vec2DataCollator:
         batch = self.processor.pad(
             input_vals, padding=True, return_tensors="pt"
         )
-        with self.processor.as_target_processor():
-            labels_batch = self.processor.pad(
-                label_vals, padding=True, return_tensors="pt"
-            )
+        # as_target_processor() was removed in transformers 5.0; use tokenizer directly
+        labels_batch = self.processor.tokenizer.pad(
+            label_vals, padding=True, return_tensors="pt"
+        )
 
         labels = labels_batch["input_ids"].masked_fill(
             labels_batch.attention_mask.ne(1), -100
