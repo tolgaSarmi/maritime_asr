@@ -158,27 +158,29 @@ def apply_lora_whisper(model, cfg: Any):
     model = get_peft_model(model, config)
     model.print_trainable_parameters()
 
-    # PeftModelForSeq2SeqLM.forward() always passes input_ids=None to the
-    # base model via its own default parameter, even for audio models like
-    # Whisper that have no input_ids (they use input_features instead).
-    # In transformers 5.x, WhisperForConditionalGeneration.forward() and
-    # WhisperModel.forward() gained **kwargs which thread all extra keyword
-    # arguments down to WhisperDecoder.forward(). WhisperDecoder already
-    # receives input_ids=decoder_input_ids explicitly, so the additional
-    # input_ids=None from **kwargs causes:
-    #   TypeError: WhisperDecoder got multiple values for keyword argument 'input_ids'
+    # PeftModelForSeq2SeqLM.forward() has input_ids=None and inputs_embeds=None
+    # as its own default parameters and explicitly passes both to self.base_model(),
+    # even for audio models like Whisper that use input_features instead.
     #
-    # Fix: attach a forward pre-hook to peft_model.base_model (LoraModel /
-    # BaseTuner). PeftModelForSeq2SeqLM calls self.base_model(...) via
-    # __call__, so the hook fires before BaseTuner.forward() runs and can
-    # strip the spurious None before it propagates.
-    def _drop_spurious_input_ids(_module, args, kwargs):
-        if kwargs.get("input_ids") is None:
-            kwargs.pop("input_ids", None)
+    # In transformers 4.57.1, WhisperModel.forward() accepts **kwargs and
+    # forwards them to self.decoder(). WhisperDecoder already receives
+    # inputs_embeds=decoder_inputs_embeds explicitly from WhisperModel line 1137,
+    # so the additional inputs_embeds=None arriving via **kwargs causes:
+    #   TypeError: WhisperDecoder got multiple values for keyword argument 'inputs_embeds'
+    # The same pattern previously caused the same error for input_ids=None.
+    #
+    # Fix: strip both input_ids=None and inputs_embeds=None at the LoraModel
+    # entry point. The hook fires via __call__ (PeftModelForSeq2SeqLM calls
+    # self.base_model(...) via __call__), before BaseTuner.forward() propagates
+    # the kwargs to WhisperForConditionalGeneration.
+    def _drop_spurious_peft_nones(_module, args, kwargs):
+        for key in ("input_ids", "inputs_embeds"):
+            if kwargs.get(key) is None:
+                kwargs.pop(key, None)
         return args, kwargs
 
     model.base_model.register_forward_pre_hook(
-        _drop_spurious_input_ids, with_kwargs=True
+        _drop_spurious_peft_nones, with_kwargs=True
     )
 
     return model
