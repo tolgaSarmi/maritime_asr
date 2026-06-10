@@ -118,7 +118,7 @@ class WhisperEvaluator:
                 t0 = time.perf_counter()
                 predicted_ids = self.model.generate(
                     input_features,
-                    max_new_tokens=self.cfg.models.whisper.max_new_tokens,
+                    max_length=self.cfg.models.whisper.max_new_tokens,
                 )
                 elapsed = time.perf_counter() - t0
 
