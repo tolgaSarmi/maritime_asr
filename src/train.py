@@ -186,106 +186,6 @@ def apply_lora_whisper(model, cfg: Any):
     return model
 
 
-def _install_whisper_lora_debug(peft_model):
-    """Print-only instrumentation tracing kwargs through the PEFT→Whisper stack.
-
-    Call chain under training:
-      PeftModelForSeq2SeqLM.__call__
-        → pre-hook fires        (Stage 1: LoraModel entry, after fix hook)
-        → BaseTuner.forward(*args, **kwargs)
-            → WhisperForCG.forward()   ← .forward() direct; wrapped at Stage 2
-                → WhisperModel.__call__
-                    → pre-hook fires   (Stage 3)
-                    → WhisperModel.forward()
-                        → WhisperDecoder.__call__
-                            → pre-hook fires  (Stage 4)
-
-    Returns (handles, ctr). Pass ctr to _WhisperLoraDebugTrainer so step
-    numbers stay consistent across the batch log and each stage hook.
-    """
-    _KEYS = [
-        "input_features", "labels", "decoder_input_ids",
-        "decoder_attention_mask", "input_ids", "inputs_embeds",
-        "decoder_inputs_embeds", "cache_position",
-    ]
-    ctr = {"n": 0}
-    handles = []
-
-    def _active():
-        return ctr["n"] < 2
-
-    def _log(stage, kwargs):
-        print(f"\n[WHISPER LORA DBG step={ctr['n']}] {stage}", flush=True)
-        print(f"  all keys: {sorted(kwargs.keys())}", flush=True)
-        for k in _KEYS:
-            if k in kwargs:
-                v = kwargs[k]
-                if v is None:
-                    desc = "None"
-                elif hasattr(v, "shape"):
-                    desc = f"tensor{tuple(v.shape)} dtype={v.dtype}"
-                else:
-                    desc = repr(v)
-                print(f"  {k}: {desc}", flush=True)
-
-    # Stage 1: LoraModel entry — fires AFTER existing _drop_spurious_input_ids
-    def _lora_model_hook(m, args, kwargs):
-        if _active():
-            _log("Stage1 → LoraModel.forward [entry, after fix hook]", kwargs)
-        return args, kwargs
-
-    handles.append(
-        peft_model.base_model.register_forward_pre_hook(
-            _lora_model_hook, with_kwargs=True
-        )
-    )
-
-    # Stage 2: WhisperForConditionalGeneration.forward
-    # BaseTuner calls self.model.forward() directly (not via __call__), so
-    # register_forward_pre_hook would not fire. Wrap the instance method instead.
-    wfcg = peft_model.base_model.model
-    _orig_wfcg_fwd = wfcg.forward
-
-    def _wfcg_debug_fwd(*args, **kwargs):
-        if _active():
-            _log("Stage2 → WhisperForConditionalGeneration.forward [from BaseTuner]", kwargs)
-        return _orig_wfcg_fwd(*args, **kwargs)
-
-    wfcg.forward = _wfcg_debug_fwd
-
-    # Stage 3: WhisperModel (called via __call__ from WhisperForConditionalGeneration)
-    try:
-        whisper_model = peft_model.base_model.model.model
-
-        def _wm_hook(m, args, kwargs):
-            if _active():
-                _log("Stage3 → WhisperModel [from WhisperForConditionalGeneration]", kwargs)
-            return args, kwargs
-
-        handles.append(
-            whisper_model.register_forward_pre_hook(_wm_hook, with_kwargs=True)
-        )
-    except AttributeError:
-        log.warning("[WHISPER LORA DBG] .base_model.model.model not found — no Stage3 hook")
-
-    # Stage 4: WhisperDecoder (called via __call__ from WhisperModel.forward)
-    try:
-        decoder = peft_model.base_model.model.model.decoder
-
-        def _wd_hook(m, args, kwargs):
-            if _active():
-                _log("Stage4 → WhisperDecoder [from WhisperModel]", kwargs)
-            return args, kwargs
-
-        handles.append(
-            decoder.register_forward_pre_hook(_wd_hook, with_kwargs=True)
-        )
-    except AttributeError:
-        log.warning("[WHISPER LORA DBG] .base_model.model.model.decoder not found — no Stage4 hook")
-
-    return handles, ctr
-
-
 def apply_lora_wav2vec2(model, cfg: Any):
     """Apply LoRA to Wav2Vec2 attention layers."""
     from peft import LoraConfig, get_peft_model
@@ -410,51 +310,6 @@ def _whisper_training_args(
     return TrainingArguments(**base)
 
 
-# ─── Whisper LoRA Debug Trainer ──────────────────────────────────────────────
-
-class _WhisperLoraDebugTrainer(Seq2SeqTrainer):
-    """Debug-only Seq2SeqTrainer.
-
-    Logs the Trainer batch keys before each forward pass for the first 2 steps,
-    coordinated with the stage hooks installed by _install_whisper_lora_debug().
-    The shared ctr dict keeps step numbers consistent across the log stages.
-    """
-
-    def __init__(self, *args, dbg_ctr=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._ctr = dbg_ctr if dbg_ctr is not None else {"n": 0}
-
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        n = self._ctr["n"]
-        if n < 2:
-            _KEYS = [
-                "input_features", "labels", "decoder_input_ids",
-                "decoder_attention_mask", "input_ids", "inputs_embeds",
-                "decoder_inputs_embeds", "cache_position",
-            ]
-            print(
-                f"\n[WHISPER LORA DBG step={n}] Trainer batch — keys: "
-                f"{sorted(inputs.keys())}",
-                flush=True,
-            )
-            for k in _KEYS:
-                if k in inputs:
-                    v = inputs[k]
-                    if v is None:
-                        desc = "None"
-                    elif hasattr(v, "shape"):
-                        desc = f"tensor{tuple(v.shape)} dtype={v.dtype}"
-                    else:
-                        desc = repr(v)
-                    print(f"  {k}: {desc}", flush=True)
-        result = super().compute_loss(
-            model, inputs, return_outputs=return_outputs, **kwargs
-        )
-        if n < 2:
-            self._ctr["n"] += 1
-        return result
-
-
 # ─── Whisper Trainer ─────────────────────────────────────────────────────────
 
 class WhisperTrainer:
@@ -494,7 +349,6 @@ class WhisperTrainer:
         elif self.method == "lora":
             model = apply_lora_whisper(model, self.cfg)
             lr = self.cfg.peft.lora.learning_rate
-            _dbg_handles, _dbg_ctr = _install_whisper_lora_debug(model)
 
         elif self.method == "full_finetuning":
             # All parameters trainable — no freezing
@@ -535,8 +389,7 @@ class WhisperTrainer:
 
         model.config.use_cache = False
 
-        _trainer_cls = _WhisperLoraDebugTrainer if self.method == "lora" else Seq2SeqTrainer
-        _trainer_kwargs = dict(
+        trainer = Seq2SeqTrainer(
             model=model,
             args=training_args,
             train_dataset=train_ds,
@@ -546,9 +399,6 @@ class WhisperTrainer:
             compute_metrics=compute_metrics,
             callbacks=callbacks,
         )
-        if self.method == "lora":
-            _trainer_kwargs["dbg_ctr"] = _dbg_ctr
-        trainer = _trainer_cls(**_trainer_kwargs)
 
         log.info("Starting training (%d train / %d val samples)...",
                  len(train_ds), len(val_ds))
