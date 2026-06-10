@@ -271,8 +271,14 @@ def _whisper_training_args(
     learning_rate: float,
     cfg: Any,
     is_seq2seq: bool = True,
+    fp16: bool | None = None,
 ) -> Seq2SeqTrainingArguments | TrainingArguments:
     tc = cfg.training
+    # fp16 param overrides the global config flag so Whisper and Wav2Vec2
+    # can be controlled independently. Wav2Vec2 is pinned to fp32 to prevent
+    # NaN logits in the encoder; Whisper uses fp16 to keep activation memory
+    # within T4 limits (307M-param Medium model OOMs in fp32 at batch_size=4).
+    _fp16 = (fp16 if fp16 is not None else tc.fp16) and torch.cuda.is_available()
     base = dict(
         output_dir=output_dir,
         per_device_train_batch_size=tc.per_device_train_batch_size,
@@ -284,7 +290,7 @@ def _whisper_training_args(
         max_grad_norm=tc.max_grad_norm,
         num_train_epochs=tc.num_train_epochs,
         lr_scheduler_type=tc.lr_scheduler_type,
-        fp16=tc.fp16 and torch.cuda.is_available(),
+        fp16=_fp16,
         eval_strategy=tc.evaluation_strategy,
         eval_steps=tc.eval_steps,
         save_strategy=tc.save_strategy,
@@ -364,7 +370,7 @@ class WhisperTrainer:
             self.data_type, processor, self.cfg
         )
         collator = WhisperDataCollator(tokenizer=processor.tokenizer)
-        training_args = _whisper_training_args(self.output_dir, lr, self.cfg)
+        training_args = _whisper_training_args(self.output_dir, lr, self.cfg, fp16=True)
 
         # FIXED early stopping patience (5 vs last year's 3)
         callbacks = [
@@ -626,7 +632,7 @@ class Wav2Vec2Trainer:
         )
         collator = Wav2Vec2DataCollator(processor=processor)
         training_args = _whisper_training_args(
-            self.output_dir, lr, self.cfg, is_seq2seq=False
+            self.output_dir, lr, self.cfg, is_seq2seq=False, fp16=False
         )
         callbacks = [
             EarlyStoppingCallback(
