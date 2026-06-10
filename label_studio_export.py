@@ -48,7 +48,7 @@ PROJECT_NAMES = {
 }
 OUTPUT_DIRS = {
     "real":      Path("data/real"),
-    "simulated": Path("data/simulated"),
+    "simulated": Path("/content/drive/MyDrive/ASR_Dissertation/data/simulated"),
 }
 # cloud = keep audio on Azure, store URL in manifest
 # local = download audio to disk

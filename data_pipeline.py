@@ -328,8 +328,14 @@ def run_full_pipeline(cfg_path: str = "configs/config.yaml") -> None:
     log.info("Maritime VHF ASR – Data Pipeline")
     log.info("═" * 55)
 
+    # Use config-driven paths so simulated audio on Drive persists across sessions
+    cfg_dirs = {
+        "real":      Path(cfg.data.real_data_dir),
+        "simulated": Path(cfg.data.simulated_data_dir),
+    }
+
     for ds_name in ("real", "simulated"):
-        ds_dir = DATA_DIRS[ds_name]
+        ds_dir = cfg_dirs[ds_name]
         manifest_path = ds_dir / "manifest.json"
 
         if not manifest_path.exists():
@@ -357,7 +363,10 @@ def run_full_pipeline(cfg_path: str = "configs/config.yaml") -> None:
         save_splits(splits, ds_dir)
 
     log.info("\n── Building combined dataset ──")
-    build_combined()
+    build_combined(
+        real_dir=cfg_dirs["real"],
+        sim_dir=cfg_dirs["simulated"],
+    )
 
     log.info("\n── Dataset Statistics ──")
     print_all_stats()

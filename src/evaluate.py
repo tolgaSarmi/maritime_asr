@@ -265,8 +265,8 @@ class ExperimentEvaluator:
             "data_root": "data/real",
         },
         "simulated": {
-            "manifest": "data/simulated/test_manifest.json",
-            "data_root": "data/simulated",
+            "manifest": "/content/drive/MyDrive/ASR_Dissertation/data/simulated/test_manifest.json",
+            "data_root": "/content/drive/MyDrive/ASR_Dissertation/data/simulated",
         },
     }
 
