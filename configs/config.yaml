@@ -27,9 +27,9 @@ label_studio:
 
 # ── Data ─────────────────────────────────────────────────────
 data:
-  real_data_dir: "data/real"
+  real_data_dir: "/content/drive/MyDrive/ASR_Dissertation/data/real"
   simulated_data_dir: "/content/drive/MyDrive/ASR_Dissertation/data/simulated"
-  combined_data_dir: "data/combined"
+  combined_data_dir: "/content/drive/MyDrive/ASR_Dissertation/data/combined"
   cache_dir: "data/cache"
   sample_rate: 16000
   max_duration: 30.0

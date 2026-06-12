@@ -205,9 +205,16 @@ def apply_lora_wav2vec2(model, cfg: Any):
 
 # ─── Dataset Helpers ─────────────────────────────────────────────────────────
 
-def _manifest_paths(data_type: str) -> tuple[str, str, str]:
-    """Return (train, val, data_root) paths for a given data_type."""
-    base = f"data/{data_type}" if data_type != "combined" else "data/combined"
+def _manifest_paths(data_type: str, cfg: Any) -> tuple[str, str, str]:
+    """Return (train_manifest, val_manifest, data_root) using config-driven paths."""
+    if data_type == "real":
+        base = cfg.data.real_data_dir
+    elif data_type == "simulated":
+        base = cfg.data.simulated_data_dir
+    elif data_type == "combined":
+        base = cfg.data.combined_data_dir
+    else:
+        base = f"data/{data_type}"
     return (
         f"{base}/train_manifest.json",
         f"{base}/val_manifest.json",
@@ -215,27 +222,26 @@ def _manifest_paths(data_type: str) -> tuple[str, str, str]:
     )
 
 
-def _check_splits_exist(data_type: str, train_m: str) -> None:
+def _check_splits_exist(data_type: str, train_m: str, base: str) -> None:
     """Raise a clear error when split manifests are missing but manifest.json exists."""
     if not Path(train_m).exists():
-        base = f"data/{data_type}" if data_type != "combined" else "data/combined"
         source_manifest = Path(base) / "manifest.json"
         if source_manifest.exists():
             raise FileNotFoundError(
                 f"Split manifests not found for '{data_type}' — manifest.json exists but "
                 f"train_manifest.json has not been generated yet.\n"
-                f"  Run Step 6:  python main.py --mode data"
+                f"  Run: python main.py --mode data"
             )
         raise FileNotFoundError(
             f"No manifest found for '{data_type}' at {base}/.\n"
-            f"  Run Step 5:  python label_studio_export.py --api-key YOUR_KEY --project {data_type}\n"
-            f"  Then Step 6: python main.py --mode data"
+            f"  Run: python label_studio_export.py --api-key YOUR_KEY --project {data_type}\n"
+            f"  Then: python main.py --mode data"
         )
 
 
 def _build_whisper_datasets(data_type: str, processor: Any, cfg: Any):
-    train_m, val_m, root = _manifest_paths(data_type)
-    _check_splits_exist(data_type, train_m)
+    train_m, val_m, root = _manifest_paths(data_type, cfg)
+    _check_splits_exist(data_type, train_m, root)
     common = dict(
         data_root=root,
         feature_extractor=processor.feature_extractor,
@@ -250,8 +256,8 @@ def _build_whisper_datasets(data_type: str, processor: Any, cfg: Any):
 
 
 def _build_wav2vec2_datasets(data_type: str, processor: Any, cfg: Any):
-    train_m, val_m, root = _manifest_paths(data_type)
-    _check_splits_exist(data_type, train_m)
+    train_m, val_m, root = _manifest_paths(data_type, cfg)
+    _check_splits_exist(data_type, train_m, root)
     common = dict(
         data_root=root,
         processor=processor,

@@ -259,22 +259,24 @@ class ExperimentEvaluator:
     Generates a results summary that feeds directly into the visualisation module.
     """
 
-    EVAL_DATASETS = {
-        "real": {
-            "manifest": "data/real/test_manifest.json",
-            "data_root": "data/real",
-        },
-        "simulated": {
-            "manifest": "/content/drive/MyDrive/ASR_Dissertation/data/simulated/test_manifest.json",
-            "data_root": "/content/drive/MyDrive/ASR_Dissertation/data/simulated",
-        },
-    }
-
     def __init__(self, cfg: Any):
         self.cfg = cfg
         self.results_dir = Path(cfg.evaluation.results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def _eval_datasets(self) -> dict:
+        """Build eval dataset paths from config so Drive paths are respected."""
+        return {
+            "real": {
+                "manifest": str(Path(self.cfg.data.real_data_dir) / "test_manifest.json"),
+                "data_root": self.cfg.data.real_data_dir,
+            },
+            "simulated": {
+                "manifest": str(Path(self.cfg.data.simulated_data_dir) / "test_manifest.json"),
+                "data_root": self.cfg.data.simulated_data_dir,
+            },
+        }
 
     def run_experiment(self, experiment: dict[str, Any]) -> dict[str, Any]:
         """
@@ -314,7 +316,7 @@ class ExperimentEvaluator:
         }
 
         for ds_name in eval_datasets:
-            ds_info = self.EVAL_DATASETS.get(ds_name)
+            ds_info = self._eval_datasets().get(ds_name)
             if ds_info is None:
                 continue
             manifest = ds_info["manifest"]
