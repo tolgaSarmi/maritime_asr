@@ -180,18 +180,14 @@ class Wav2Vec2Evaluator:
         try:
             self.processor = Wav2Vec2Processor.from_pretrained(model_path)
         except (OSError, EnvironmentError):
-            # Wav2Vec2Trainer did not call processor.save_pretrained() — the
-            # checkpoint has model weights but no tokenizer/feature-extractor
-            # files.  The processor is identical to the original pretrained
-            # model, so load it from there instead.
-            import json as _json
-            config_path = Path(model_path) / "config.json"
-            original_name = (
-                _json.loads(config_path.read_text()).get("_name_or_path", model_path)
-                if config_path.exists() else model_path
-            )
+            # Wav2Vec2Trainer omitted processor.save_pretrained() so the
+            # checkpoint has no tokenizer/feature-extractor files.
+            # config.json._name_or_path is set to the output dir by
+            # trainer.save_model(), not the original HF model name, so we
+            # read the name from cfg instead.
+            original_name = cfg.models.wav2vec2.name
             log.warning(
-                "No processor files in checkpoint %s — loading from original: %s",
+                "No processor files in checkpoint %s — loading from %s",
                 model_path, original_name,
             )
             self.processor = Wav2Vec2Processor.from_pretrained(original_name)
