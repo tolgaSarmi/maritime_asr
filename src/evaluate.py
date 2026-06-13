@@ -360,6 +360,12 @@ class ExperimentEvaluator:
         all_results: dict[str, Any] = {}
         for experiment in self.cfg.experiments:
             exp_name = experiment["name"]
+            result_path = self.results_dir / f"{exp_name}.json"
+            if result_path.exists():
+                log.info("SKIPPING %s — results already exist at %s", exp_name, result_path)
+                with open(result_path) as f:
+                    all_results[exp_name] = json.load(f)
+                continue
             log.info("─" * 50)
             log.info("Evaluating: %s", exp_name)
             log.info("─" * 50)
