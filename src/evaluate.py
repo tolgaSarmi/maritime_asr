@@ -177,7 +177,24 @@ class Wav2Vec2Evaluator:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         log.info("Loading Wav2Vec2 from: %s", model_path)
-        self.processor = Wav2Vec2Processor.from_pretrained(model_path)
+        try:
+            self.processor = Wav2Vec2Processor.from_pretrained(model_path)
+        except (OSError, EnvironmentError):
+            # Wav2Vec2Trainer did not call processor.save_pretrained() — the
+            # checkpoint has model weights but no tokenizer/feature-extractor
+            # files.  The processor is identical to the original pretrained
+            # model, so load it from there instead.
+            import json as _json
+            config_path = Path(model_path) / "config.json"
+            original_name = (
+                _json.loads(config_path.read_text()).get("_name_or_path", model_path)
+                if config_path.exists() else model_path
+            )
+            log.warning(
+                "No processor files in checkpoint %s — loading from original: %s",
+                model_path, original_name,
+            )
+            self.processor = Wav2Vec2Processor.from_pretrained(original_name)
         self.model = Wav2Vec2ForCTC.from_pretrained(model_path)
         self.model.eval()
         self.model.to(self.device)

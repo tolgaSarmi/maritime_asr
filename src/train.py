@@ -700,6 +700,7 @@ class Wav2Vec2Trainer:
             result = trainer.train()
 
         trainer.save_model(self.output_dir)
+        processor.save_pretrained(self.output_dir)
         trainer.save_metrics("train", result.metrics)
         trainer.save_state()
 
