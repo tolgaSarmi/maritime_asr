@@ -36,7 +36,6 @@ from transformers import (
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
 )
-from transformers.trainer_utils import get_last_checkpoint
 
 from src.dataset import (
     WhisperASRDataset,
@@ -201,6 +200,140 @@ def apply_lora_wav2vec2(model, cfg: Any):
     model = get_peft_model(model, config)
     model.print_trainable_parameters()
     return model
+
+
+# ─── Checkpoint Helpers ──────────────────────────────────────────────────────
+
+def _validate_checkpoint(ckpt: Path) -> str | None:
+    """
+    Validate one checkpoint-N directory.  Returns None if valid, or a string
+    describing the first failure found.
+
+    Checks (in order):
+      1. A model weights file exists — covers every training method and model:
+           model.safetensors            Whisper EF, full fine-tuning
+           pytorch_model.bin            legacy fallback for the above
+           model-NNNNN-of-MMMMM.safetensors  sharded Whisper-large
+           adapter_model.safetensors    LoRA (PEFT) — all models
+           adapter_model.bin            legacy LoRA fallback
+      2. trainer_state.json exists — Trainer needs this to restore step/epoch
+         and the best-model path before calling optimizer/scheduler state.
+      3. Any .safetensors file passes a binary format check (first 8 bytes).
+         Guards against the failure mode where Drive fills up mid-write and
+         torch.save writes a pickle stream to a .safetensors path, which later
+         causes:
+             ValueError: could not determine the shape of object type
+             'torch.storage.UntypedStorage'
+         in safetensors.torch.load_file() during resume.
+    """
+    import struct
+
+    # 1. Model weights
+    model_file: Path | None = None
+    for name in (
+        "model.safetensors",
+        "pytorch_model.bin",
+        "adapter_model.safetensors",
+        "adapter_model.bin",
+    ):
+        if (ckpt / name).exists():
+            model_file = ckpt / name
+            break
+    if model_file is None:
+        shards = [
+            f for f in ckpt.iterdir()
+            if f.name.startswith("model-") and f.suffix == ".safetensors"
+        ]
+        if shards:
+            model_file = shards[0]
+    if model_file is None:
+        return "no model weights file"
+
+    # 2. trainer_state.json
+    if not (ckpt / "trainer_state.json").exists():
+        return "trainer_state.json missing"
+
+    # 3. Safetensors format check
+    if model_file.suffix == ".safetensors":
+        try:
+            with open(model_file, "rb") as fh:
+                first8 = fh.read(8)
+            if len(first8) < 8:
+                return f"{model_file.name} too small to be valid safetensors"
+            header_len = struct.unpack("<Q", first8)[0]
+            # Valid safetensors JSON headers are 1 B – ~10 MB.
+            # torch.save pickle magic (0x80 0x02/04/05 or PK\x03\x04) produces
+            # header_len values in the billions, catching the corrupt-file case.
+            if header_len == 0 or header_len > 100_000_000:
+                return (
+                    f"{model_file.name} failed safetensors header check "
+                    f"(header_len={header_len}, bytes={first8.hex()!r}) — "
+                    "likely a torch.save pickle written to a .safetensors path"
+                )
+        except OSError as exc:
+            return f"{model_file.name} unreadable: {exc}"
+
+    return None  # all checks passed
+
+
+def _find_valid_checkpoint(output_dir: str) -> str | None:
+    """
+    Scan checkpoint-N directories newest → oldest and return the path of the
+    first one that passes _validate_checkpoint(), or None to start fresh.
+    All validation failures are logged before moving to the next candidate.
+    """
+    out = Path(output_dir)
+    if not out.is_dir():
+        return None
+
+    checkpoints = sorted(
+        [d for d in out.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
+        key=lambda d: int(d.name.split("-")[1]),
+        reverse=True,
+    )
+    if not checkpoints:
+        return None
+
+    for ckpt in checkpoints:
+        failure = _validate_checkpoint(ckpt)
+        if failure is not None:
+            log.warning("Checkpoint %s invalid (%s) — skipping", ckpt.name, failure)
+            continue
+        # Determine which weights file was found for the log
+        for wf in ("model.safetensors", "pytorch_model.bin",
+                   "adapter_model.safetensors", "adapter_model.bin"):
+            if (ckpt / wf).exists():
+                weights_name = wf
+                break
+        else:
+            weights_name = "sharded safetensors"
+        if ckpt != checkpoints[0]:
+            log.warning(
+                "Fell back from %s to %s after validation failures",
+                checkpoints[0].name, ckpt.name,
+            )
+        log.info("Resuming from %s (%s)", ckpt.name, weights_name)
+        return str(ckpt)
+
+    log.warning("No valid checkpoint in %s — starting fresh", output_dir)
+    return None
+
+
+def _cleanup_checkpoints(output_dir: str) -> None:
+    """
+    Delete checkpoint-N subdirs after successful training.
+
+    trainer.save_model() already wrote the final model (weights only, no
+    optimizer state) to output_dir root. The checkpoint subdirs are only
+    needed for mid-run resume; once training completes they consume Drive
+    space (~2 GB+ each for Whisper Medium) with no remaining benefit.
+    """
+    import shutil
+    out = Path(output_dir)
+    for ckpt in sorted(out.iterdir()):
+        if ckpt.is_dir() and ckpt.name.startswith("checkpoint-"):
+            shutil.rmtree(ckpt)
+            log.info("Removed checkpoint dir after training: %s", ckpt.name)
 
 
 # ─── Dataset Helpers ─────────────────────────────────────────────────────────
@@ -415,19 +548,17 @@ class WhisperTrainer:
         log.info("Starting training (%d train / %d val samples)...",
                  len(train_ds), len(val_ds))
 
-        # Detect and resume from latest checkpoint if available
-        last_checkpoint = get_last_checkpoint(self.output_dir)
-        if last_checkpoint is not None:
-            log.info("Resuming from checkpoint: %s", last_checkpoint)
-            result = trainer.train(resume_from_checkpoint=last_checkpoint)
-        else:
-            log.info("No checkpoint found — starting fresh")
-            result = trainer.train()
+        last_checkpoint = _find_valid_checkpoint(self.output_dir)
+        result = trainer.train(resume_from_checkpoint=last_checkpoint)
 
         trainer.save_model(self.output_dir)
         processor.save_pretrained(self.output_dir)
         trainer.save_metrics("train", result.metrics)
         trainer.save_state()
+        # Remove checkpoint-N subdirs now that the final model is saved.
+        # Each subdir holds optimizer state (~1–4 GB) that is only needed
+        # for mid-run resume; keeping it after completion wastes Drive space.
+        _cleanup_checkpoints(self.output_dir)
 
         log.info(
             "Done. train_loss=%.4f", result.metrics.get("train_loss", 0)
@@ -690,19 +821,14 @@ class Wav2Vec2Trainer:
             callbacks=callbacks,
         )
 
-        # Detect and resume from latest checkpoint if available
-        last_checkpoint = get_last_checkpoint(self.output_dir)
-        if last_checkpoint is not None:
-            log.info("Resuming from checkpoint: %s", last_checkpoint)
-            result = trainer.train(resume_from_checkpoint=last_checkpoint)
-        else:
-            log.info("No checkpoint found — starting fresh")
-            result = trainer.train()
+        last_checkpoint = _find_valid_checkpoint(self.output_dir)
+        result = trainer.train(resume_from_checkpoint=last_checkpoint)
 
         trainer.save_model(self.output_dir)
         processor.save_pretrained(self.output_dir)
         trainer.save_metrics("train", result.metrics)
         trainer.save_state()
+        _cleanup_checkpoints(self.output_dir)
 
         log.info("Done. train_loss=%.4f", result.metrics.get("train_loss", 0))
         return result.metrics
