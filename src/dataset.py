@@ -168,8 +168,12 @@ class ASRDataset(Dataset):
     # ── Statistics ───────────────────────────────────────────────────────────
     def statistics(self) -> dict[str, Any]:
         durations = []
+        url_count = 0
         for s in self.samples:
             p = self._resolve_path(s["audio_file"])
+            if is_url(str(p)):
+                url_count += 1
+                continue
             try:
                 import soundfile as sf  # noqa: PLC0415
                 info = sf.info(str(p))
@@ -178,13 +182,17 @@ class ASRDataset(Dataset):
                 pass
         total_h = sum(durations) / 3600 if durations else 0
         texts = [s["transcription"] for s in self.samples]
-        return {
+        stats = {
             "n_samples": len(self.samples),
             "total_hours": round(total_h, 2),
             "mean_duration_s": round(np.mean(durations), 2) if durations else 0,
             "vocab_size": len(set(" ".join(texts).split())),
             "mean_words": round(np.mean([len(t.split()) for t in texts]), 1),
         }
+        if url_count:
+            stats["url_audio_count"] = url_count
+            stats["note"] = "duration unavailable for cloud audio"
+        return stats
 
 
 # ─── Whisper Dataset ─────────────────────────────────────────────────────────
@@ -289,7 +297,6 @@ class WhisperDataCollator:
     padding: bool = True
 
     def __call__(self, features: list[dict]) -> dict[str, torch.Tensor]:
-        input_features = [{"input_features": f["input_features"]} for f in features]
         label_features = [{"input_ids": f["labels"]} for f in features]
 
         # input_features are already fixed 80×3000 mel spectrograms —
@@ -458,13 +465,24 @@ class DatasetFactory:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
     def _get_manifests(self, data_type: str) -> dict[str, str]:
-        base = "data"
-        if data_type == "combined":
-            return {s: f"{base}/combined/{s}_manifest.json" for s in ("train", "val", "test")}
-        return {s: f"{base}/{data_type}/{s}_manifest.json" for s in ("train", "val", "test")}
+        if data_type == "real":
+            base = self.cfg.data.real_data_dir
+        elif data_type == "simulated":
+            base = self.cfg.data.simulated_data_dir
+        elif data_type == "combined":
+            base = self.cfg.data.combined_data_dir
+        else:
+            base = f"data/{data_type}"
+        return {s: f"{base}/{s}_manifest.json" for s in ("train", "val", "test")}
 
     def _get_data_root(self, data_type: str) -> str:
-        return f"data/{data_type}" if data_type != "combined" else "data"
+        if data_type == "real":
+            return self.cfg.data.real_data_dir
+        elif data_type == "simulated":
+            return self.cfg.data.simulated_data_dir
+        elif data_type == "combined":
+            return self.cfg.data.combined_data_dir
+        return f"data/{data_type}"
 
     def _build_sampler(self, dataset: ASRDataset) -> WeightedRandomSampler | None:
         """
@@ -530,31 +548,3 @@ def create_splits(
     return paths
 
 
-def combine_manifests(
-    real_dir: str | Path,
-    simulated_dir: str | Path,
-    output_dir: str | Path,
-) -> dict[str, Path]:
-    """Merge real + simulated split manifests into combined manifests."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths: dict[str, Path] = {}
-
-    for split in ("train", "val", "test"):
-        real_path = Path(real_dir) / f"{split}_manifest.json"
-        sim_path = Path(simulated_dir) / f"{split}_manifest.json"
-
-        combined: list[dict] = []
-        for p in (real_path, sim_path):
-            if p.exists():
-                with open(p, encoding="utf-8") as f:
-                    combined.extend(json.load(f))
-
-        out = output_dir / f"{split}_manifest.json"
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(combined, f, indent=2, ensure_ascii=False)
-
-        log.info("Combined %s split: %d samples → %s", split, len(combined), out)
-        paths[split] = out
-
-    return paths

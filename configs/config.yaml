@@ -55,7 +55,7 @@ models:
     task: "transcribe"
     max_new_tokens: 448
 
-  parakeet:
+  parakeet:  # Future work — not implemented in this dissertation
     sizes:
       - "nvidia/parakeet-tdt-0.6b-v2"
       - "nvidia/parakeet-tdt-1.1b"

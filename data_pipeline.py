@@ -295,11 +295,12 @@ def compute_stats(records: list[dict], label: str) -> dict:
     return stats
 
 
-def print_all_stats() -> None:
+def print_all_stats(dirs: dict | None = None) -> None:
     """Print statistics for all datasets and splits."""
-    for ds_name, ds_dir in DATA_DIRS.items():
+    _dirs = dirs if dirs is not None else DATA_DIRS
+    for ds_name, ds_dir in _dirs.items():
         for split in ("train", "val", "test"):
-            manifest = ds_dir / f"{split}_manifest.json"
+            manifest = Path(ds_dir) / f"{split}_manifest.json"
             if manifest.exists():
                 records = load_manifest(manifest)
                 compute_stats(records, f"{ds_name}/{split}")
@@ -371,7 +372,7 @@ def run_full_pipeline(cfg_path: str = "configs/config.yaml") -> None:
     )
 
     log.info("\n── Dataset Statistics ──")
-    print_all_stats()
+    print_all_stats(cfg_dirs)
 
     log.info("\n✅  Data pipeline complete.")
     log.info("    Next: python main.py --mode train --experiment ef_whisper_large_real")
@@ -399,13 +400,30 @@ if __name__ == "__main__":
     elif args.mode == "splits":
         from omegaconf import OmegaConf
         cfg = OmegaConf.load(args.config)
+        _cfg_dirs = {
+            "real":      Path(cfg.data.real_data_dir),
+            "simulated": Path(cfg.data.simulated_data_dir),
+        }
         for ds_name in ("real", "simulated"):
-            ds_dir = DATA_DIRS[ds_name]
+            ds_dir = _cfg_dirs[ds_name]
             manifest_path = ds_dir / "manifest.json"
             if manifest_path.exists():
                 records = validate_manifest(load_manifest(manifest_path), ds_dir)
                 save_splits(split_records(records, seed=cfg.data.random_seed), ds_dir)
     elif args.mode == "combine":
-        build_combined()
+        from omegaconf import OmegaConf
+        cfg = OmegaConf.load(args.config)
+        build_combined(
+            real_dir=Path(cfg.data.real_data_dir),
+            sim_dir=Path(cfg.data.simulated_data_dir),
+            output_dir=Path(cfg.data.combined_data_dir),
+        )
     elif args.mode == "stats":
-        print_all_stats()
+        from omegaconf import OmegaConf
+        cfg = OmegaConf.load(args.config)
+        _cfg_dirs = {
+            "real":      Path(cfg.data.real_data_dir),
+            "simulated": Path(cfg.data.simulated_data_dir),
+            "combined":  Path(cfg.data.combined_data_dir),
+        }
+        print_all_stats(_cfg_dirs)
