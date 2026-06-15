@@ -67,29 +67,50 @@ def load_results(results_dir: str | Path = "results") -> pd.DataFrame:
     """
     Load all results JSON files and flatten into a tidy DataFrame.
     Each row = one (experiment, eval_dataset) combination.
+
+    Reads ``all_results.json`` when present; falls back to individual
+    ``<exp_name>.json`` files so figures work even when eval_all was never
+    run to completion.
     """
     rows = []
     results_dir = Path(results_dir)
-    for p in sorted(results_dir.glob("*.json")):
-        if p.name == "all_results.json":
+
+    def _parse_exp(exp_name: str, exp_data: dict) -> None:
+        for key, val in exp_data.items():
+            if key.startswith("eval_") and isinstance(val, dict):
+                rows.append({
+                    "experiment": exp_name,
+                    "model": exp_data.get("model", ""),
+                    "model_size": exp_data.get("model_size", ""),
+                    "method": exp_data.get("method", "baseline"),
+                    "train_data": exp_data.get("train_data", "none"),
+                    "eval_dataset": key[len("eval_"):],
+                    "wer": val.get("wer"),
+                    "cer": val.get("cer"),
+                    "n_samples": val.get("n_samples", 0),
+                })
+
+    all_results_path = results_dir / "all_results.json"
+    if all_results_path.exists():
+        try:
+            data = json.loads(all_results_path.read_text())
+            for exp_name, exp_data in data.items():
+                _parse_exp(exp_name, exp_data)
+        except Exception as e:
+            log.warning("Could not parse %s: %s", all_results_path, e)
+
+    if not rows:
+        # Fall back to individual per-experiment files
+        for p in sorted(results_dir.glob("*.json")):
+            if p.name == "all_results.json":
+                continue
             try:
-                data = json.loads(p.read_text())
-                for exp_name, exp_data in data.items():
-                    for key, val in exp_data.items():
-                        if key.startswith("eval_") and isinstance(val, dict):
-                            rows.append({
-                                "experiment": exp_name,
-                                "model": exp_data.get("model", ""),
-                                "model_size": exp_data.get("model_size", ""),
-                                "method": exp_data.get("method", "baseline"),
-                                "train_data": exp_data.get("train_data", "none"),
-                                "eval_dataset": key[len("eval_"):],
-                                "wer": val.get("wer"),
-                                "cer": val.get("cer"),
-                                "n_samples": val.get("n_samples", 0),
-                            })
+                exp_data = json.loads(p.read_text())
+                exp_name = exp_data.get("experiment", p.stem)
+                _parse_exp(exp_name, exp_data)
             except Exception as e:
                 log.warning("Could not parse %s: %s", p, e)
+
     if not rows:
         log.warning("No results found in %s", results_dir)
     return pd.DataFrame(rows)
@@ -277,10 +298,14 @@ def plot_cross_domain_heatmap(df: pd.DataFrame, method: str = "lora") -> Path:
         log.warning("No data for cross_domain heatmap (method=%s)", method)
         return None
 
-    # Pick the largest model only for clarity
-    large = [s for s in sub["model_size"].unique() if "large" in s]
-    if large:
-        sub = sub[sub["model_size"] == large[0]]
+    # Pick the largest available model for clarity (fall back to medium, then small)
+    selected_size_label = "available"
+    for size_key in ("large", "medium", "small"):
+        sized = [s for s in sub["model_size"].unique() if size_key in s]
+        if sized:
+            sub = sub[sub["model_size"] == sized[0]]
+            selected_size_label = sized[0].split("/")[-1]
+            break
 
     train_conditions = ["real", "simulated", "combined"]
     eval_datasets = ["real", "simulated"]
@@ -313,7 +338,7 @@ def plot_cross_domain_heatmap(df: pd.DataFrame, method: str = "lora") -> Path:
 
     ax.set_title(
         f"Cross-Domain Generalisation Heatmap\n"
-        f"Whisper-large | {method.replace('_', ' ').title()}"
+        f"Whisper-{selected_size_label} | {method.replace('_', ' ').title()}"
     )
     plt.tight_layout()
     return _save(fig, f"04_cross_domain_heatmap_{method}")

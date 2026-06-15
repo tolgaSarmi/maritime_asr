@@ -324,6 +324,8 @@ class ExperimentEvaluator:
         exp_results: dict[str, Any] = {
             "experiment": exp_name,
             "model": model_type,
+            "model_size": experiment.get("model_size", ""),
+            "method": experiment.get("method", "baseline"),
             "train_data": experiment.get("train_data"),
             "description": experiment.get("description", ""),
         }
