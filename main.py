@@ -26,8 +26,10 @@ Usage examples:
 
   # ── Quick WER on a manifest ───────────────────────────────
   python main.py --mode test_wer \\
-      --checkpoint checkpoints/ef_whisper_large_real \\
-      --manifest data/real/test_manifest.json
+      --checkpoint /content/drive/MyDrive/ASR_Dissertation/checkpoints/ef_whisper_large_real \\
+      --manifest /content/drive/MyDrive/ASR_Dissertation/data/real/test_manifest.json
+  # Relative paths like "data/real/test_manifest.json" are auto-resolved
+  # against the data dirs declared in configs/config.yaml.
 
   # ── Transcribe a single audio file ───────────────────────
   python main.py --mode transcribe \\
@@ -53,6 +55,40 @@ log = logging.getLogger(__name__)
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _resolve_manifest(manifest_arg: str, cfg) -> Path:
+    """
+    Locate a manifest file, falling back to config data dirs when the given
+    path does not exist as-is (e.g. a cwd-relative path passed from Colab).
+
+    Search order: real_data_dir, simulated_data_dir, combined_data_dir —
+    dirs whose base name appears in the input path are tried first.
+    """
+    p = Path(manifest_arg)
+    if p.exists():
+        return p
+
+    data_dirs = [
+        Path(cfg.data.real_data_dir),
+        Path(cfg.data.simulated_data_dir),
+        Path(cfg.data.combined_data_dir),
+    ]
+    # Prefer a dir whose base name matches a component of the input path
+    ordered = sorted(data_dirs, key=lambda d: 0 if d.name in p.parts else 1)
+    candidates = [d / p.name for d in ordered]
+
+    for candidate in candidates:
+        if candidate.exists():
+            log.info("Resolved manifest %s → %s", manifest_arg, candidate)
+            return candidate
+
+    tried = "\n  ".join([str(p.resolve())] + [str(c) for c in candidates])
+    raise FileNotFoundError(
+        f"Manifest not found.\n"
+        f"  Requested : {manifest_arg}\n"
+        f"  Tried     :\n  {tried}"
+    )
+
 
 def _load_cfg(config_path: str = "configs/config.yaml"):
     from src.utils import load_config, setup_logger, set_seed
@@ -240,7 +276,14 @@ def mode_test_wer(args):
 
     cfg = _load_cfg(args.config)
     checkpoint = args.checkpoint
-    manifest = args.manifest
+
+    try:
+        manifest = _resolve_manifest(args.manifest, cfg)
+    except FileNotFoundError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
+
+    data_root = str(manifest.parent)
 
     # Auto-detect model type from checkpoint
     model_type = "whisper"
@@ -256,7 +299,6 @@ def mode_test_wer(args):
         from src.evaluate import Wav2Vec2Evaluator
         evaluator = Wav2Vec2Evaluator(checkpoint, cfg)
 
-    data_root = str(Path(manifest).parent)
     results = evaluator.evaluate(manifest, data_root, split="test")
 
     console.print(f"\nWER  : [bold red]{results['wer']:.4f}[/bold red] ({results['wer']*100:.2f}%)")
