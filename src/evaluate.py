@@ -263,6 +263,50 @@ class Wav2Vec2Evaluator:
         return metrics
 
 
+# ─── Checkpoint Resolution ───────────────────────────────────────────────────
+
+_WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin")
+
+
+def _resolve_checkpoint(checkpoint_dir: Path, pretrained_fallback: str) -> str:
+    """
+    Return the best available model path for a fine-tuned experiment.
+
+    Priority:
+      1. checkpoint_dir itself (final saved model)
+      2. Latest checkpoint-N/ subdirectory (training interrupted after a save)
+      3. pretrained_fallback (training never saved anything useful)
+    """
+    def _has_weights(p: Path) -> bool:
+        return any((p / w).exists() for w in _WEIGHT_FILES)
+
+    if checkpoint_dir.exists():
+        if _has_weights(checkpoint_dir):
+            return str(checkpoint_dir)
+
+        # Look for checkpoint-N subdirectories
+        subdirs = sorted(
+            [d for d in checkpoint_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
+            key=lambda d: int(d.name.split("-")[1]),
+        )
+        for sub in reversed(subdirs):
+            if _has_weights(sub):
+                log.warning(
+                    "Final model missing in %s — using sub-checkpoint %s",
+                    checkpoint_dir, sub.name,
+                )
+                return str(sub)
+
+        log.warning(
+            "No model weights found in %s or its sub-checkpoints — falling back to pretrained.",
+            checkpoint_dir,
+        )
+    else:
+        log.warning("Checkpoint dir not found: %s — falling back to pretrained.", checkpoint_dir)
+
+    return pretrained_fallback
+
+
 # ─── Experiment Evaluator ────────────────────────────────────────────────────
 
 class ExperimentEvaluator:
@@ -307,13 +351,7 @@ class ExperimentEvaluator:
             # Baseline: use pretrained model from experiment config
             model_path = experiment["model_size"]
         else:
-            model_path = str(checkpoint_dir)
-            if not checkpoint_dir.exists():
-                log.warning(
-                    "Checkpoint not found for '%s', falling back to pretrained.", exp_name
-                )
-                # Fallback to pretrained model specified in experiment
-                model_path = experiment["model_size"]
+            model_path = _resolve_checkpoint(checkpoint_dir, experiment["model_size"])
 
         # Build evaluator
         if model_type == "whisper":
