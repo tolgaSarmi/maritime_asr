@@ -414,26 +414,53 @@ class ExperimentEvaluator:
 
         return exp_results
 
+    def _checkpoint_ready(self, experiment: dict) -> bool:
+        """Return False if a fine-tuned experiment has no usable model weights."""
+        if experiment.get("train_data") is None:
+            return True  # baselines use pretrained hub models, always available
+        checkpoint_dir = Path(self.cfg.training.output_dir) / experiment["name"]
+        resolved = _resolve_checkpoint(checkpoint_dir, "")
+        return resolved != ""
+
     def run_all(self) -> dict[str, Any]:
         """Run evaluation for every experiment defined in config."""
         all_results: dict[str, Any] = {}
+        skipped: list[str] = []
+
         for experiment in self.cfg.experiments:
             exp_name = experiment["name"]
             result_path = self.results_dir / f"{exp_name}.json"
+
             if result_path.exists():
                 log.info("SKIPPING %s — results already exist at %s", exp_name, result_path)
                 with open(result_path) as f:
                     all_results[exp_name] = json.load(f)
                 continue
+
+            if not self._checkpoint_ready(experiment):
+                log.warning(
+                    "SKIPPING %s — no model weights found in checkpoint dir (training incomplete?)",
+                    exp_name,
+                )
+                skipped.append(exp_name)
+                continue
+
             log.info("─" * 50)
             log.info("Evaluating: %s", exp_name)
             log.info("─" * 50)
-            results = self.run_experiment(dict(experiment))
-            all_results[exp_name] = results
+            try:
+                results = self.run_experiment(dict(experiment))
+                all_results[exp_name] = results
+            except Exception as exc:
+                log.error("SKIPPING %s — unexpected error during evaluation: %s", exp_name, exc)
+                skipped.append(exp_name)
 
         # Save aggregated results
         save_results(all_results, self.results_dir / "all_results.json")
-        log.info("\n✅ All evaluations complete. Results → %s", self.results_dir)
+        if skipped:
+            log.warning("Skipped %d experiment(s) due to missing checkpoints or errors: %s",
+                        len(skipped), skipped)
+        log.info("\n✅ Evaluation complete. Results → %s", self.results_dir)
         return all_results
 
     def build_summary_table(self, all_results: dict) -> list[dict]:
