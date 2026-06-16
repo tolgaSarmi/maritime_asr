@@ -278,7 +278,14 @@ def _resolve_checkpoint(checkpoint_dir: Path, pretrained_fallback: str) -> str:
       3. pretrained_fallback (training never saved anything useful)
     """
     def _has_weights(p: Path) -> bool:
-        return any((p / w).exists() for w in _WEIGHT_FILES)
+        for w in _WEIGHT_FILES:
+            f = p / w
+            try:
+                if f.exists() and f.stat().st_size > 0:
+                    return True
+            except OSError:
+                pass
+        return False
 
     if checkpoint_dir.exists():
         if _has_weights(checkpoint_dir):
@@ -353,11 +360,23 @@ class ExperimentEvaluator:
         else:
             model_path = _resolve_checkpoint(checkpoint_dir, experiment["model_size"])
 
-        # Build evaluator
-        if model_type == "whisper":
-            evaluator = WhisperEvaluator(model_path, self.cfg, self.device)
-        else:
-            evaluator = Wav2Vec2Evaluator(model_path, self.cfg, self.device)
+        # Build evaluator — fall back to pretrained if the checkpoint is corrupt
+        pretrained = experiment["model_size"]
+        def _make_evaluator(path: str):
+            if model_type == "whisper":
+                return WhisperEvaluator(path, self.cfg, self.device)
+            return Wav2Vec2Evaluator(path, self.cfg, self.device)
+
+        try:
+            evaluator = _make_evaluator(model_path)
+        except OSError as exc:
+            if model_path == pretrained:
+                raise
+            log.warning(
+                "Failed to load checkpoint %s (%s) — falling back to pretrained %s",
+                model_path, exc, pretrained,
+            )
+            evaluator = _make_evaluator(pretrained)
 
         exp_results: dict[str, Any] = {
             "experiment": exp_name,
