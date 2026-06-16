@@ -374,7 +374,7 @@ def run_full_pipeline(cfg_path: str = "configs/config.yaml") -> None:
     log.info("\n── Dataset Statistics ──")
     print_all_stats(cfg_dirs)
 
-    log.info("\n✅  Data pipeline complete.")
+    log.info("\nData pipeline complete.")
     log.info("    Next: python main.py --mode train --experiment ef_whisper_large_real")
 
 

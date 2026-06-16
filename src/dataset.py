@@ -37,8 +37,6 @@ log = logging.getLogger(__name__)
 
 TARGET_SR = 16_000
 
-# Collator debug: print first-batch label statistics once per process.
-_W2V_COLLATOR_LOGGED = False
 
 
 # ─── Base Dataset ────────────────────────────────────────────────────────────
@@ -331,8 +329,6 @@ class Wav2Vec2DataCollator:
     padding: bool = True
 
     def __call__(self, features: list[dict]) -> dict[str, torch.Tensor]:
-        global _W2V_COLLATOR_LOGGED
-
         input_vals = [{"input_values": f["input_values"]} for f in features]
         label_vals = [{"input_ids": f["labels"].tolist()} for f in features]
 
@@ -356,32 +352,6 @@ class Wav2Vec2DataCollator:
 
         labels = labels_batch["input_ids"].masked_fill(mask, -100)
         batch["labels"] = labels
-
-        if not _W2V_COLLATOR_LOGGED:
-            _W2V_COLLATOR_LOGGED = True
-            has_attn = "attention_mask" in labels_batch
-            n_invalid = (labels == -100).sum().item()
-            n_valid = (labels != -100).sum().item()
-            print("\n=== [W2V DEBUG] First collator batch ===", flush=True)
-            print(f"  batch size:              {len(features)}", flush=True)
-            print(f"  labels_batch keys:       {list(labels_batch.keys())}", flush=True)
-            print(f"  has attention_mask:      {has_attn}", flush=True)
-            if has_attn:
-                print(f"  attention_mask[0]:       {labels_batch.attention_mask[0].tolist()}", flush=True)
-            print(f"  labels shape:            {tuple(labels.shape)}", flush=True)
-            print(f"  labels -100 count:       {n_invalid}", flush=True)
-            print(f"  labels valid count:      {n_valid}", flush=True)
-            for i in range(min(2, len(features))):
-                row = labels[i]
-                valid_ids = row[row != -100].tolist()
-                try:
-                    decoded = self.processor.tokenizer.decode(valid_ids)
-                except Exception as exc:
-                    decoded = f"<decode error: {exc}>"
-                print(f"  sample {i} raw IDs:      {valid_ids}", flush=True)
-                print(f"  sample {i} decoded:      '{decoded}'", flush=True)
-                print(f"  sample {i} full row:     {row.tolist()}", flush=True)
-            print("=== [W2V DEBUG] end ===\n", flush=True)
 
         # Note: "transcriptions" removed - metadata fields cause ValueError in model.generate()
         # Standalone evaluators decode refs from labels instead
@@ -500,51 +470,5 @@ class DatasetFactory:
         )
 
 
-# ─── Manifest Splitter ───────────────────────────────────────────────────────
-
-def create_splits(
-    manifest_path: str | Path,
-    output_dir: str | Path,
-    train_ratio: float = 0.8,
-    val_ratio: float = 0.1,
-    test_ratio: float = 0.1,
-    seed: int = 42,
-) -> dict[str, Path]:
-    """
-    Split a single manifest JSON into train/val/test files.
-    Writes the three split manifests to *output_dir*.
-    """
-    import random  # noqa: PLC0415
-
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "Ratios must sum to 1"
-
-    with open(manifest_path, encoding="utf-8") as f:
-        records = json.load(f)
-
-    random.seed(seed)
-    random.shuffle(records)
-
-    n = len(records)
-    n_train = int(n * train_ratio)
-    n_val = int(n * val_ratio)
-
-    splits = {
-        "train": records[:n_train],
-        "val": records[n_train : n_train + n_val],
-        "test": records[n_train + n_val :],
-    }
-
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths: dict[str, Path] = {}
-
-    for split_name, split_records in splits.items():
-        out = output_dir / f"{split_name}_manifest.json"
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(split_records, f, indent=2, ensure_ascii=False)
-        log.info("Saved %s split: %d samples → %s", split_name, len(split_records), out)
-        paths[split_name] = out
-
-    return paths
 
 

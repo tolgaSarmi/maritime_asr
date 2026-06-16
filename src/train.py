@@ -90,12 +90,6 @@ def load_wav2vec2(model_name: str, cfg: Any):
         format_number(params["total"]),
         format_number(params["trainable"]),
     )
-    # Confirm ctc_zero_infinity landed in the model config (not just the arg)
-    log.info(
-        "  [DEBUG] cfg.ctc_zero_infinity=%s  model.config.ctc_zero_infinity=%s",
-        w2v.ctc_zero_infinity,
-        model.config.ctc_zero_infinity,
-    )
     return model, processor
 
 
@@ -120,17 +114,10 @@ def apply_encoder_freezing_wav2vec2(model) -> None:
         param.requires_grad = False
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    trainable_groups = sorted({
-        ".".join(n.split(".")[:2])
-        for n, p in model.named_parameters()
-        if p.requires_grad
-    })
     log.info(
-        "Wav2Vec2 encoder frozen — trainable: %s / %s (%.1f%%)\n"
-        "  [DEBUG] Trainable groups: %s",
+        "Wav2Vec2 encoder frozen — trainable: %s / %s (%.1f%%)",
         format_number(trainable), format_number(total),
         100 * trainable / total,
-        trainable_groups,
     )
 
 

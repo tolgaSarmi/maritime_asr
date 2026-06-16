@@ -47,8 +47,8 @@ PROJECT_NAMES = {
     "simulated": "sim_vhf_dataset",
 }
 OUTPUT_DIRS = {
-    "real":      Path("/content/drive/MyDrive/ASR_Dissertation/data/real"),
-    "simulated": Path("/content/drive/MyDrive/ASR_Dissertation/data/simulated"),
+    "real":      Path(os.environ.get("ASR_REAL_DATA_DIR",      "data/real")),
+    "simulated": Path(os.environ.get("ASR_SIMULATED_DATA_DIR", "data/simulated")),
 }
 # cloud = keep audio on Azure, store URL in manifest
 # local = download audio to disk
@@ -242,12 +242,12 @@ def export_project(
 
     if mode == "local":
         audio_dir.mkdir(parents=True, exist_ok=True)
-        log.info("💾 Storage: LOCAL  → audio saved to %s", audio_dir)
+        log.info("Storage: LOCAL  → audio saved to %s", audio_dir)
     else:
-        log.info("☁️  Storage: CLOUD  → audio URLs stored in manifest (no download)")
+        log.info("Storage: CLOUD  → audio URLs stored in manifest (no download)")
 
     # Find project
-    log.info("🔍 Finding project: '%s'", project_name)
+    log.info("Finding project: '%s'", project_name)
     project = client.find_project(project_name)
     if project is None:
         log.error("Project '%s' not found.", project_name)
@@ -255,7 +255,7 @@ def export_project(
 
     project_id    = project["id"]
     known_total   = get_project_task_count(project)
-    log.info("✅ Found project ID=%d  |  Tasks: %d", project_id, known_total)
+    log.info("Found project ID=%d  |  Tasks: %d", project_id, known_total)
 
     # Fetch all tasks — pass known_total so pagination stops correctly
     tasks = client.export_tasks(project_id, known_total=known_total)
@@ -336,7 +336,7 @@ def export_project(
     except ImportError:
         pass
 
-    log.info("✅ [%s] Exported=%d  Skipped=%d  Failed=%d → %s",
+    log.info("[%s] Exported=%d  Skipped=%d  Failed=%d → %s",
              project_key, stats["exported"], stats["skipped"],
              stats["failed"], manifest_path)
     return stats
@@ -400,7 +400,7 @@ def main() -> None:
 
     for target in targets:
         log.info("\n" + "═" * 60)
-        log.info("📦 Exporting: %s  [%s]",
+        log.info("Exporting: %s  [%s]",
                  PROJECT_NAMES[target],
                  "cloud — URLs only" if STORAGE_MODE[target] == "cloud"
                  else "local — downloading audio")
@@ -412,12 +412,12 @@ def main() -> None:
         )
 
     log.info("\n" + "═" * 60)
-    log.info("📊 Export Summary")
+    log.info("Export Summary")
     log.info("═" * 60)
     for key, s in all_stats.items():
-        icon = "☁️ " if STORAGE_MODE[key] == "cloud" else "💾"
+        mode_label = "cloud" if STORAGE_MODE[key] == "cloud" else "local"
         log.info("  %-12s [%s] → exported: %4d | skipped: %4d | failed: %4d",
-                 key, icon, s["exported"], s["skipped"], s["failed"])
+                 key, mode_label, s["exported"], s["skipped"], s["failed"])
     log.info("\nNext step:  python main.py --mode data")
 
 

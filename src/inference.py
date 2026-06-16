@@ -24,7 +24,6 @@ from transformers import (
     WhisperProcessor,
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
-    pipeline,
 )
 
 from src.preprocessing import preprocess_audio, normalize_text

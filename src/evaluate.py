@@ -28,7 +28,6 @@ from transformers import (
     WhisperProcessor,
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
-    pipeline,
 )
 
 from src.dataset import (
@@ -460,7 +459,7 @@ class ExperimentEvaluator:
         if skipped:
             log.warning("Skipped %d experiment(s) due to missing checkpoints or errors: %s",
                         len(skipped), skipped)
-        log.info("\n✅ Evaluation complete. Results → %s", self.results_dir)
+        log.info("\nEvaluation complete. Results → %s", self.results_dir)
         return all_results
 
     def build_summary_table(self, all_results: dict) -> list[dict]:

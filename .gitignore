@@ -10,8 +10,13 @@ data/simulated/audio/
 # Checkpoints (saved to Drive, not git)
 checkpoints/
 
-# Generated results
+# Generated results (figures and logs are derived outputs)
+results/figures/
 results/logs/
+runs/
+
+# Test caches
+.pytest_cache/
 
 # Python
 __pycache__/
