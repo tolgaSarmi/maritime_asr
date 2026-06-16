@@ -59,13 +59,59 @@ METHOD_LABEL = {
 
 # ─── Public: load ─────────────────────────────────────────────────────────────
 
+def _flatten(raw: dict) -> dict:
+    """
+    Normalise any supported all_results.json schema to the flat format:
+        {experiment_name}_{test_domain} → {"wer": float, "cer": float, "samples": int}
+
+    Handles two schemas:
+
+    A – flat (already correct, written by rebuild scripts / test fixtures):
+        "baseline_whisper_small_real": {"wer": 0.7577, ...}
+
+    B – nested (written by ExperimentEvaluator.run_all):
+        "baseline_whisper_small": {
+            "eval_real":      {"wer": 0.7577, "cer": 0.45, "n_samples": 151, ...},
+            "eval_simulated": {"wer": 0.6821, ...}
+        }
+    """
+    if not raw:
+        return raw
+
+    # Detect schema by checking first value
+    sample = next(iter(raw.values()))
+    if not isinstance(sample, dict):
+        return raw  # unexpected; return as-is and let callers handle it
+
+    # Schema A: value already has "wer" at top level
+    if "wer" in sample:
+        return raw
+
+    # Schema B: value has "eval_real" / "eval_simulated" sub-dicts
+    flat: dict = {}
+    for exp_name, exp_data in raw.items():
+        if not isinstance(exp_data, dict):
+            continue
+        for domain in ("real", "simulated"):
+            metrics = exp_data.get(f"eval_{domain}")
+            if not isinstance(metrics, dict) or "wer" not in metrics:
+                continue
+            flat[f"{exp_name}_{domain}"] = {
+                "wer":     metrics["wer"],
+                "cer":     metrics.get("cer"),
+                "samples": metrics.get("n_samples", metrics.get("samples", 0)),
+            }
+    return flat
+
+
 def load_results(results_dir: str = "results") -> dict:
     """
-    Read results/all_results.json and return its contents as a plain dict.
+    Read results/all_results.json and return a flat dict keyed by
+    {experiment_name}_{test_domain} → {"wer": float, "cer": float, "samples": int}.
 
-    Keys follow the pattern  {experiment_name}_{test_domain}  where test_domain
-    is 'real' or 'simulated'.  Values are dicts with at least a 'wer' key (0-1).
-    Returns {} with a warning if the file is missing or unreadable.
+    Accepts both the nested format written by ExperimentEvaluator.run_all() and
+    the flat format written by rebuild scripts.  Returns {} with a warning if the
+    file is missing or unreadable.
     """
     path = Path(results_dir) / "all_results.json"
     if not path.exists():
@@ -73,7 +119,8 @@ def load_results(results_dir: str = "results") -> dict:
         return {}
     try:
         with open(path) as fh:
-            data = json.load(fh)
+            raw = json.load(fh)
+        data = _flatten(raw)
         log.info("Loaded %d result entries from %s", len(data), path)
         return data
     except Exception as exc:
