@@ -3,11 +3,10 @@ src/train.py
 ══════════════════════════════════════════════════════════════════════════════
 Training module for all experiments.
 
-Supports three PEFT strategies (improved over last year):
+Supports three PEFT strategies:
   • encoder_freezing  – freeze acoustic encoder, train decoder only
-  • lora              – FIXED: no quantisation, expanded target_modules,
-                        systematic LR, proper early stopping patience
-  • full_finetuning   – NEW: full weight update (viable with larger dataset)
+  • lora              – parameter-efficient fine-tuning via low-rank adaptation
+  • full_finetuning   – full weight update
 
 Models supported:
   • OpenAI Whisper (small / medium / large)
@@ -29,10 +28,8 @@ from transformers import (
     Seq2SeqTrainingArguments,
     Trainer,
     TrainingArguments,
-    WhisperFeatureExtractor,
     WhisperForConditionalGeneration,
     WhisperProcessor,
-    WhisperTokenizer,
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
 )
@@ -75,7 +72,7 @@ def load_wav2vec2(model_name: str, cfg: Any):
     model = Wav2Vec2ForCTC.from_pretrained(
         model_name,
         ctc_loss_reduction="mean",
-        ctc_zero_infinity=w2v.ctc_zero_infinity,  # was silently ignored before; prevents NaN gradients on fp16 overflow
+        ctc_zero_infinity=w2v.ctc_zero_infinity,  # prevents NaN gradients on CTC loss overflow
         pad_token_id=processor.tokenizer.pad_token_id,
         attention_dropout=w2v.attention_dropout,
         hidden_dropout=w2v.hidden_dropout,
@@ -125,10 +122,8 @@ def apply_lora_whisper(model, cfg: Any):
     """
     Apply LoRA to Whisper.
 
-    KEY FIXES over last year:
-      1. No 8-bit quantisation — caused instability with small datasets
-      2. Expanded target_modules: q/k/v/out instead of just q/v
-      3. Learning rate set to 1e-3 (empirically validated last year)
+    No 8-bit quantisation is used — it causes gradient instability with small datasets.
+    Target modules span all attention projections (q/k/v/out) for full adaptation coverage.
     """
     from peft import LoraConfig, TaskType, get_peft_model
 
@@ -498,7 +493,6 @@ class WhisperTrainer:
         collator = WhisperDataCollator(tokenizer=processor.tokenizer)
         training_args = _whisper_training_args(self.output_dir, lr, self.cfg, fp16=True)
 
-        # FIXED early stopping patience (5 vs last year's 3)
         callbacks = [
             EarlyStoppingCallback(
                 early_stopping_patience=self.cfg.training.early_stopping_patience,

@@ -11,15 +11,11 @@ import json
 import logging
 import os
 import random
-import shutil
-import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-import yaml
 from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
 from rich.logging import RichHandler
@@ -122,114 +118,6 @@ def get_device(prefer_cuda: bool = True) -> torch.device:
     return device
 
 
-def gpu_info() -> dict[str, Any]:
-    """Return a dict of GPU memory stats (bytes)."""
-    if not torch.cuda.is_available():
-        return {}
-    return {
-        "allocated_gb": torch.cuda.memory_allocated() / 1e9,
-        "reserved_gb": torch.cuda.memory_reserved() / 1e9,
-        "max_allocated_gb": torch.cuda.max_memory_allocated() / 1e9,
-    }
-
-
-# ─── Checkpoint Helpers ──────────────────────────────────────────────────────
-
-def save_checkpoint(
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    epoch: int,
-    metrics: dict[str, float],
-    output_dir: str | Path,
-    filename: str | None = None,
-) -> Path:
-    """Save model + optimizer state with metadata."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = filename or f"checkpoint_epoch{epoch:03d}.pt"
-    checkpoint_path = output_dir / filename
-
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "metrics": metrics,
-            "timestamp": datetime.now().isoformat(),
-        },
-        checkpoint_path,
-    )
-    log.info("Checkpoint saved → %s", checkpoint_path)
-    return checkpoint_path
-
-
-def load_checkpoint(
-    checkpoint_path: str | Path,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer | None = None,
-    device: torch.device | None = None,
-) -> dict[str, Any]:
-    """Load checkpoint and restore model/optimizer weights."""
-    checkpoint_path = Path(checkpoint_path)
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-
-    map_location = device or torch.device("cpu")
-    ckpt = torch.load(checkpoint_path, map_location=map_location)
-
-    model.load_state_dict(ckpt["model_state_dict"])
-    if optimizer is not None and "optimizer_state_dict" in ckpt:
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-
-    log.info(
-        "Loaded checkpoint from epoch %d  (WER: %.4f)",
-        ckpt.get("epoch", -1),
-        ckpt.get("metrics", {}).get("wer", float("nan")),
-    )
-    return ckpt
-
-
-def find_best_checkpoint(checkpoint_dir: str | Path, metric: str = "wer") -> Path | None:
-    """Scan checkpoint directory and return the path with best metric."""
-    checkpoint_dir = Path(checkpoint_dir)
-    best_path = None
-    best_val = float("inf")  # lower is better for WER
-
-    for ckpt_file in sorted(checkpoint_dir.glob("*.pt")):
-        try:
-            ckpt = torch.load(ckpt_file, map_location="cpu")
-            val = ckpt.get("metrics", {}).get(metric, float("inf"))
-            if val < best_val:
-                best_val = val
-                best_path = ckpt_file
-        except Exception:
-            continue
-
-    if best_path:
-        log.info("Best checkpoint: %s  (%s=%.4f)", best_path.name, metric, best_val)
-    return best_path
-
-
-# ─── Timing ──────────────────────────────────────────────────────────────────
-
-class Timer:
-    """Context manager for timing code blocks."""
-
-    def __init__(self, name: str = ""):
-        self.name = name
-        self.elapsed: float = 0.0
-
-    def __enter__(self) -> "Timer":
-        self._start = time.perf_counter()
-        return self
-
-    def __exit__(self, *_) -> None:
-        self.elapsed = time.perf_counter() - self._start
-        if self.name:
-            log.info("%s: %.3f s", self.name, self.elapsed)
-
-
 # ─── Results Persistence ─────────────────────────────────────────────────────
 
 def save_results(results: dict[str, Any], output_path: str | Path) -> None:
@@ -245,19 +133,6 @@ def load_results(results_path: str | Path) -> dict[str, Any]:
     """Load previously saved results JSON."""
     with open(results_path, encoding="utf-8") as f:
         return json.load(f)
-
-
-def aggregate_results(results_dir: str | Path) -> dict[str, Any]:
-    """Load all results/*.json and merge into one summary dict."""
-    results_dir = Path(results_dir)
-    aggregated: dict[str, Any] = {}
-    for p in sorted(results_dir.glob("*.json")):
-        try:
-            data = load_results(p)
-            aggregated[p.stem] = data
-        except Exception as exc:
-            log.warning("Could not load %s: %s", p, exc)
-    return aggregated
 
 
 # ─── Pretty Printing ─────────────────────────────────────────────────────────
@@ -307,9 +182,3 @@ def format_number(n: int) -> str:
     return str(n)
 
 
-def cleanup_old_checkpoints(checkpoint_dir: Path, keep: int = 3) -> None:
-    """Keep only the `keep` most-recent checkpoints by modification time."""
-    ckpts = sorted(checkpoint_dir.glob("checkpoint_epoch*.pt"), key=lambda p: p.stat().st_mtime)
-    for old in ckpts[:-keep]:
-        old.unlink()
-        log.debug("Removed old checkpoint: %s", old.name)

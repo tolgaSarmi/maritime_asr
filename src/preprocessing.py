@@ -227,68 +227,6 @@ def preprocess_audio(
     return waveform
 
 
-def batch_preprocess(
-    paths: list[str | Path],
-    output_dir: str | Path | None = None,
-    **preprocess_kwargs: Any,
-) -> dict[str, np.ndarray | None]:
-    """Preprocess multiple audio files/URLs. Optionally save processed versions."""
-    from tqdm import tqdm  # noqa: PLC0415
-
-    results: dict[str, np.ndarray | None] = {}
-    if output_dir is not None:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    for path in tqdm(paths, desc="Preprocessing audio", unit="file"):
-        waveform = preprocess_audio(path, **preprocess_kwargs)
-        results[str(path)] = waveform
-
-        if waveform is not None and output_dir is not None and not is_url(str(path)):
-            out_path = output_dir / Path(path).with_suffix(".wav").name
-            save_audio(waveform, out_path, sr=preprocess_kwargs.get("target_sr", TARGET_SR))
-
-    valid = sum(1 for v in results.values() if v is not None)
-    log.info("Preprocessing complete: %d / %d files kept", valid, len(paths))
-    return results
-
-
-# ─── Feature Extraction ──────────────────────────────────────────────────────
-def extract_log_mel(
-    waveform: np.ndarray,
-    sr: int = TARGET_SR,
-    n_mels: int = 80,
-    n_fft: int = 400,
-    hop_length: int = 160,
-    fmin: float = 0.0,
-    fmax: float = 8_000.0,
-) -> np.ndarray:
-    mel     = librosa.feature.melspectrogram(
-        y=waveform.astype(np.float64), sr=sr,
-        n_mels=n_mels, n_fft=n_fft, hop_length=hop_length,
-        fmin=fmin, fmax=fmax,
-    )
-    log_mel = librosa.power_to_db(mel, ref=np.max)
-    return log_mel.astype(np.float32)
-
-
-def get_audio_stats(
-    waveform: np.ndarray,
-    sr: int = TARGET_SR,
-) -> dict[str, float]:
-    rms      = float(np.sqrt(np.mean(waveform ** 2)))
-    peak     = float(np.abs(waveform).max())
-    duration = len(waveform) / sr
-    return {
-        "duration_s":   round(duration, 3),
-        "rms":          round(rms, 6),
-        "rms_db":       round(20 * np.log10(rms + 1e-9), 2),
-        "peak":         round(peak, 6),
-        "peak_db":      round(20 * np.log10(peak + 1e-9), 2),
-        "samples":      len(waveform),
-        "sample_rate":  sr,
-    }
-
 
 # ─── Text Normalisation ──────────────────────────────────────────────────────
 def normalize_text(text: str, domain: str = "maritime") -> str:

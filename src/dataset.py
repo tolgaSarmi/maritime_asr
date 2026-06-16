@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data import Dataset
 from transformers import (
     WhisperFeatureExtractor,
     WhisperTokenizer,
@@ -356,119 +355,3 @@ class Wav2Vec2DataCollator:
         # Note: "transcriptions" removed - metadata fields cause ValueError in model.generate()
         # Standalone evaluators decode refs from labels instead
         return batch
-
-
-# ─── Dataset Factory ─────────────────────────────────────────────────────────
-
-class DatasetFactory:
-    """
-    Constructs train/val/test DataLoaders from manifest files.
-
-    Supports three training scenarios:
-        • 'real'       – only Maritime_ASR_Main data
-        • 'simulated'  – only sim_vhf_dataset data
-        • 'combined'   – both datasets concatenated
-    """
-
-    def __init__(self, cfg: Any):
-        self.cfg = cfg
-
-    def build(
-        self,
-        model_type: str,          # 'whisper' or 'wav2vec2'
-        data_type: str,           # 'real', 'simulated', 'combined'
-        feature_extractor: Any,
-        tokenizer: Any,
-        processor: Any = None,
-    ) -> dict[str, DataLoader]:
-        """Return {'train': DataLoader, 'val': DataLoader, 'test': DataLoader}."""
-
-        manifests = self._get_manifests(data_type)
-        splits = ["train", "val", "test"]
-        loaders: dict[str, DataLoader] = {}
-
-        for split in splits:
-            manifest_path = manifests.get(split)
-            if manifest_path is None or not Path(manifest_path).exists():
-                log.warning("No manifest for split '%s', skipping.", split)
-                continue
-
-            data_root = self._get_data_root(data_type)
-            kwargs = dict(
-                manifest_path=manifest_path,
-                data_root=data_root,
-                split=split,
-                max_duration=self.cfg.data.max_duration,
-                min_duration=self.cfg.data.min_duration,
-                normalize=self.cfg.data.normalize_audio,
-            )
-
-            if model_type == "whisper":
-                ds = WhisperASRDataset(
-                    **kwargs,
-                    feature_extractor=feature_extractor,
-                    tokenizer=tokenizer,
-                )
-                collator = WhisperDataCollator(tokenizer=tokenizer)
-            else:
-                ds = Wav2Vec2ASRDataset(**kwargs, processor=processor)
-                collator = Wav2Vec2DataCollator(processor=processor)
-
-            shuffle = split == "train"
-            sampler = self._build_sampler(ds) if (shuffle and data_type == "combined") else None
-
-            loaders[split] = DataLoader(
-                ds,
-                batch_size=self.cfg.training.per_device_train_batch_size
-                if split == "train"
-                else self.cfg.training.per_device_eval_batch_size,
-                shuffle=shuffle and sampler is None,
-                sampler=sampler,
-                collate_fn=collator,
-                num_workers=4,
-                pin_memory=True,
-                drop_last=split == "train",
-            )
-            log.info("DataLoader [%s/%s]: %d batches", data_type, split, len(loaders[split]))
-
-        return loaders
-
-    # ── Internal helpers ──────────────────────────────────────────────────────
-    def _get_manifests(self, data_type: str) -> dict[str, str]:
-        if data_type == "real":
-            base = self.cfg.data.real_data_dir
-        elif data_type == "simulated":
-            base = self.cfg.data.simulated_data_dir
-        elif data_type == "combined":
-            base = self.cfg.data.combined_data_dir
-        else:
-            base = f"data/{data_type}"
-        return {s: f"{base}/{s}_manifest.json" for s in ("train", "val", "test")}
-
-    def _get_data_root(self, data_type: str) -> str:
-        if data_type == "real":
-            return self.cfg.data.real_data_dir
-        elif data_type == "simulated":
-            return self.cfg.data.simulated_data_dir
-        elif data_type == "combined":
-            return self.cfg.data.combined_data_dir
-        return f"data/{data_type}"
-
-    def _build_sampler(self, dataset: ASRDataset) -> WeightedRandomSampler | None:
-        """
-        Build WeightedRandomSampler that up-samples the minority class
-        (real vs simulated) in combined training.
-        """
-        types = [s.get("data_type", "unknown") for s in dataset.samples]
-        unique, counts = np.unique(types, return_counts=True)
-        class_weights = {t: 1.0 / c for t, c in zip(unique, counts)}
-        weights = [class_weights.get(t, 1.0) for t in types]
-        return WeightedRandomSampler(
-            weights=torch.DoubleTensor(weights),
-            num_samples=len(weights),
-            replacement=True,
-        )
-
-
-
-

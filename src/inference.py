@@ -190,10 +190,7 @@ def benchmark_speed(
 
     for _ in range(n_samples):
         with InferenceTimer(transcriber.device) as t:
-            if isinstance(transcriber, WhisperTranscriber):
-                transcriber.transcribe(audio)
-            else:
-                transcriber.transcribe(audio)
+            transcriber.transcribe(audio)
         times.append(t.elapsed)
 
     avg_latency = float(np.mean(times))

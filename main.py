@@ -223,9 +223,9 @@ def mode_train_all(args):
 
 def mode_figures(args):
     """Generate all dissertation figures from saved results."""
-    from src.visualization import generate_all_figures
+    from src.visualization import plot_all
     cfg = _load_cfg(args.config)
-    generate_all_figures(cfg.evaluation.results_dir)
+    plot_all(cfg.evaluation.results_dir)
     log.info("Figures saved to results/figures/")
 
 

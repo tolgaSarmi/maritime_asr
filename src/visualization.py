@@ -14,7 +14,6 @@ Public API
   load_results(results_dir)   → dict    raw JSON contents
   plot_all(results_dir)       → None    saves 6 PNG figures to results/figures/
   show_figures(results_dir)   → None    notebook: generate + display inline
-  generate_all_figures(...)   → None    alias for plot_all (called by main.py)
 ══════════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
@@ -554,10 +553,6 @@ def plot_all(results_dir: str = "results") -> None:
     ]
     generated = sum(1 for fn in plotters if fn(data, figures_dir))
     log.info("Generated %d / %d figures → %s", generated, len(plotters), figures_dir)
-
-
-# Alias kept for backward compatibility — main.py imports generate_all_figures
-generate_all_figures = plot_all
 
 
 def show_figures(results_dir: str = "results") -> None:

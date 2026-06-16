@@ -1,7 +1,5 @@
 # ============================================================
 # Maritime VHF ASR – Master Configuration
-# Improved over last year: proper splits, fixed LoRA,
-# full fine-tuning, real/sim/combined experiment matrix
 # ============================================================
 
 project:
@@ -22,23 +20,20 @@ label_studio:
       name: "Maritime_ASR_Main"
       id: null
   export_format: "JSON"
-  audio_download: true
-  cache_dir: "data/"
 
 # ── Data ─────────────────────────────────────────────────────
 data:
   real_data_dir: "/content/drive/MyDrive/ASR_Dissertation/data/real"
   simulated_data_dir: "/content/drive/MyDrive/ASR_Dissertation/data/simulated"
   combined_data_dir: "/content/drive/MyDrive/ASR_Dissertation/data/combined"
-  cache_dir: "data/cache"
   sample_rate: 16000
   max_duration: 30.0
   min_duration: 0.5
   normalize_audio: true
-  # Silence removal (pydub — same settings that won last year's grid search)
+  # Silence removal (pydub)
   silence_thresh_dbfs: -35
   min_silence_len_ms: 1500
-  # Splits — FIXED vs last year: large enough val set for stable WER
+  # Splits
   train_ratio: 0.80
   val_ratio: 0.10
   test_ratio: 0.10
@@ -55,11 +50,6 @@ models:
     task: "transcribe"
     max_new_tokens: 448
 
-  parakeet:  # Future work — not implemented in this dissertation
-    sizes:
-      - "nvidia/parakeet-tdt-0.6b-v2"
-      - "nvidia/parakeet-tdt-1.1b"
-
   wav2vec2:
     name: "facebook/wav2vec2-base-960h"
     ctc_zero_infinity: true
@@ -73,9 +63,9 @@ models:
 training:
   output_dir: "/content/drive/MyDrive/ASR_Dissertation/checkpoints"
   num_train_epochs: 100
-  per_device_train_batch_size: 4   # halved for lower GPU memory; effective batch = 4×8 = 32
+  per_device_train_batch_size: 4   # effective batch size = per_device × gradient_accum = 32
   per_device_eval_batch_size: 4
-  gradient_accumulation_steps: 8   # doubled to preserve effective batch size of 32
+  gradient_accumulation_steps: 8
   dataloader_num_workers: 2
   weight_decay: 0.01
   max_grad_norm: 1.0
@@ -85,7 +75,7 @@ training:
   evaluation_strategy: "steps"
   eval_steps: 100
   save_strategy: "steps"
-  save_steps: 200                   # halves checkpoint write frequency vs 100
+  save_steps: 200
   save_total_limit: 1               # 1 checkpoint during training; post-training cleanup removes it
   load_best_model_at_end: true
   metric_for_best_model: "eval_wer"
@@ -93,7 +83,7 @@ training:
   logging_steps: 5
   logging_dir: "results/logs"
   report_to: ["tensorboard"]
-  early_stopping_patience: 5       # increased from 3 to avoid premature stop
+  early_stopping_patience: 5
   early_stopping_threshold: 0.001
 
 # ── PEFT Methods ─────────────────────────────────────────────
@@ -101,21 +91,16 @@ peft:
   encoder_freezing:
     learning_rate: 5.0e-5
 
-  # FIXED vs last year:
-  # - No 8-bit quantisation (causes instability with small datasets)
-  # - Expanded target_modules (last year only used q_proj + v_proj)
-  # - LR grid search: 1e-4, 5e-4, 1e-3
+  # No 8-bit quantisation — causes gradient instability with small datasets.
+  # All four attention projections (q/k/v/out) are targeted for full coverage.
   lora:
-    learning_rate: 1.0e-3           # empirically found last year
-    lr_candidates: [1.0e-4, 5.0e-4, 1.0e-3]
+    learning_rate: 1.0e-3
     r: 32
     lora_alpha: 64
-    target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]  # expanded
+    target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]
     lora_dropout: 0.05
     bias: "none"
-    use_quantisation: false         # disabled — fixes instability
 
-  # NEW vs last year — now viable with 3× more data
   full_finetuning:
     learning_rate: 1.0e-5           # lower LR for full FT to avoid forgetting
 
@@ -123,7 +108,6 @@ peft:
 evaluation:
   batch_size: 16
   results_dir: "/content/drive/MyDrive/ASR_Dissertation/results"
-  metrics: ["wer", "cer"]
 
 # ── Experiments ──────────────────────────────────────────────
 # Full matrix: 3 models × 4 training strategies × 3 data conditions

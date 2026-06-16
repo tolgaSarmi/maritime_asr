@@ -3,12 +3,10 @@ data_pipeline.py
 ══════════════════════════════════════════════════════════════════════════════
 End-to-end data preparation pipeline.
 
-Directly builds on last year's approach with key improvements:
-  • pydub.silence parameters confirmed optimal by last year's grid search
-    (silence_thresh=-35 dBFS, min_silence_len=1500ms, F1=0.9813, recall=1.0)
-  • Whisper-small sentence-level segmentation (identical to last year)
+Pipeline stages:
   • Label Studio export via label_studio_export.py
-  • Proper 80/10/10 train/val/test split — FIXED vs last year's tiny val set
+  • Silence removal using pydub (silence_thresh=-35 dBFS, min_silence_len=1500ms)
+  • 80/10/10 train/val/test split
   • Combined manifest builder for real + simulated training
 
 Usage:
@@ -53,12 +51,11 @@ DATA_DIRS = {
 SEED = 42
 
 
-# ─── Normalisation (matches last year's prep_ground_truth.py) ────────────────
+# ─── Normalisation ───────────────────────────────────────────────────────────
 
 def normalize_transcription(text: str) -> str:
     """
     Normalise transcription for WER computation.
-    Rules match last year's implementation:
       • digit-by-digit expansion  (e.g. "16" → "one six")
       • lowercase
       • strip punctuation
@@ -183,14 +180,7 @@ def split_records(
     test_ratio: float = 0.10,
     seed: int = SEED,
 ) -> dict[str, list[dict]]:
-    """
-    Stratified train/val/test split.
-
-    KEY IMPROVEMENT over last year:
-    Last year had only ~10 minutes validation, causing wildly unstable WER
-    metrics and premature early stopping. With the larger dataset we now get
-    a proper validation set that produces reliable metrics.
-    """
+    """Stratified train/val/test split."""
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
 
     random.seed(seed)

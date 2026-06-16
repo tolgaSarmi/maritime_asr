@@ -384,7 +384,7 @@ def main() -> None:
 
     client = LabelStudioClient(api_key=args.api_key, base_url=args.base_url)
 
-    log.info("🌐 Connecting to %s ...", args.base_url)
+    log.info("Connecting to %s ...", args.base_url)
     try:
         projects = client.list_projects()
         log.info("   Found %d accessible projects", len(projects))

@@ -87,7 +87,7 @@ save:
 	@cp -r checkpoints/. $(DRIVE)/checkpoints/ 2>/dev/null || true
 	@cp data/real/manifest.json $(DRIVE)/data/real/ 2>/dev/null || true
 	@cp data/simulated/manifest.json $(DRIVE)/data/simulated/ 2>/dev/null || true
-	@echo "✅ Saved to $(DRIVE)"
+	@echo "Saved to $(DRIVE)"
 
 restore:
 	@echo "Restoring from Drive..."
@@ -95,12 +95,12 @@ restore:
 	@cp -r $(DRIVE)/checkpoints/. checkpoints/ 2>/dev/null || true
 	@cp $(DRIVE)/data/real/manifest.json data/real/ 2>/dev/null || true
 	@cp $(DRIVE)/data/simulated/manifest.json data/simulated/ 2>/dev/null || true
-	@echo "✅ Restored from $(DRIVE)"
+	@echo "Restored from $(DRIVE)"
 
 save-manifests:
 	@mkdir -p $(DRIVE)/data/real $(DRIVE)/data/simulated $(DRIVE)/data/combined
 	@find data -name "*.json" -exec sh -c 'mkdir -p $(DRIVE)/$$(dirname {}); cp {} $(DRIVE)/{}' \;
-	@echo "✅ All manifests saved to Drive"
+	@echo "All manifests saved to Drive"
 
 restore-manifests:
 	@find $(DRIVE)/data -name "*.json" 2>/dev/null | while read f; do \
@@ -109,7 +109,7 @@ restore-manifests:
 		cp $$f $$rel; \
 		echo "Restored: $$rel"; \
 	done
-	@echo "✅ Manifests restored"
+	@echo "Manifests restored"
 
 # ── Git ───────────────────────────────────────────────────────────────────────
 push:
@@ -145,12 +145,12 @@ clean:
 	rm -rf data/simulated/train_manifest.json data/simulated/val_manifest.json data/simulated/test_manifest.json
 	rm -rf data/combined/
 	rm -rf results/
-	@echo "✅ Cleaned generated files (manifests and checkpoints preserved)"
+	@echo "Cleaned generated files (manifests and checkpoints preserved)"
 
 clean-all: clean
 	rm -rf checkpoints/
 	rm -rf data/real/manifest.json data/simulated/manifest.json
-	@echo "✅ Full clean — re-run make export && make data to start fresh"
+	@echo "Full clean complete — re-run make export && make data to start fresh"
 
 .PHONY: setup-mac setup-colab export-real export-sim export data \
         train train-all train-simulated train-combined \
