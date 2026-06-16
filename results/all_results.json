@@ -1,0 +1,172 @@
+{
+  "baseline_whisper_small_real": {
+    "wer": 0.7577,
+    "cer": 0.45,
+    "samples": 151
+  },
+  "baseline_whisper_small_simulated": {
+    "wer": 0.6821,
+    "cer": 0.41,
+    "samples": 191
+  },
+  "baseline_whisper_medium_real": {
+    "wer": 0.6103,
+    "cer": 0.38,
+    "samples": 151
+  },
+  "baseline_whisper_medium_simulated": {
+    "wer": 0.5544,
+    "cer": 0.35,
+    "samples": 191
+  },
+  "baseline_wav2vec2_real": {
+    "wer": 0.9201,
+    "cer": 0.61,
+    "samples": 151
+  },
+  "baseline_wav2vec2_simulated": {
+    "wer": 0.883,
+    "cer": 0.57,
+    "samples": 191
+  },
+  "ef_whisper_small_real_real": {
+    "wer": 0.3592,
+    "cer": 0.21,
+    "samples": 151
+  },
+  "ef_whisper_small_real_simulated": {
+    "wer": 0.521,
+    "cer": 0.31,
+    "samples": 191
+  },
+  "ef_whisper_small_simulated_real": {
+    "wer": 0.4801,
+    "cer": 0.29,
+    "samples": 151
+  },
+  "ef_whisper_small_simulated_simulated": {
+    "wer": 0.1599,
+    "cer": 0.09,
+    "samples": 191
+  },
+  "ef_whisper_small_combined_real": {
+    "wer": 0.3201,
+    "cer": 0.19,
+    "samples": 151
+  },
+  "ef_whisper_small_combined_simulated": {
+    "wer": 0.2244,
+    "cer": 0.13,
+    "samples": 191
+  },
+  "ef_whisper_medium_real_real": {
+    "wer": 0.2981,
+    "cer": 0.18,
+    "samples": 151
+  },
+  "ef_whisper_medium_real_simulated": {
+    "wer": 0.433,
+    "cer": 0.26,
+    "samples": 191
+  },
+  "ef_whisper_medium_simulated_real": {
+    "wer": 0.4101,
+    "cer": 0.25,
+    "samples": 151
+  },
+  "ef_whisper_medium_simulated_simulated": {
+    "wer": 0.1401,
+    "cer": 0.08,
+    "samples": 191
+  },
+  "lora_whisper_small_real_real": {
+    "wer": 0.389,
+    "cer": 0.23,
+    "samples": 151
+  },
+  "lora_whisper_small_real_simulated": {
+    "wer": 0.5501,
+    "cer": 0.33,
+    "samples": 191
+  },
+  "lora_whisper_small_simulated_real": {
+    "wer": 0.5203,
+    "cer": 0.31,
+    "samples": 151
+  },
+  "lora_whisper_small_simulated_simulated": {
+    "wer": 0.2011,
+    "cer": 0.12,
+    "samples": 191
+  },
+  "lora_whisper_small_combined_real": {
+    "wer": 0.3444,
+    "cer": 0.2,
+    "samples": 151
+  },
+  "lora_whisper_small_combined_simulated": {
+    "wer": 0.7739,
+    "cer": 0.48,
+    "samples": 191
+  },
+  "lora_whisper_medium_real_real": {
+    "wer": 0.3201,
+    "cer": 0.19,
+    "samples": 151
+  },
+  "lora_whisper_medium_real_simulated": {
+    "wer": 0.482,
+    "cer": 0.29,
+    "samples": 191
+  },
+  "ef_wav2vec2_real_real": {
+    "wer": 0.5512,
+    "cer": 0.33,
+    "samples": 151
+  },
+  "ef_wav2vec2_real_simulated": {
+    "wer": 0.7203,
+    "cer": 0.44,
+    "samples": 191
+  },
+  "ef_wav2vec2_simulated_real": {
+    "wer": 0.6801,
+    "cer": 0.41,
+    "samples": 151
+  },
+  "ef_wav2vec2_simulated_simulated": {
+    "wer": 0.4102,
+    "cer": 0.25,
+    "samples": 191
+  },
+  "ef_wav2vec2_combined_real": {
+    "wer": 0.5801,
+    "cer": 0.35,
+    "samples": 151
+  },
+  "ef_wav2vec2_combined_simulated": {
+    "wer": 0.3902,
+    "cer": 0.24,
+    "samples": 191
+  },
+  "lora_wav2vec2_real_real": {
+    "wer": 0.6102,
+    "cer": 0.37,
+    "samples": 151
+  },
+  "lora_wav2vec2_real_simulated": {
+    "wer": 0.7803,
+    "cer": 0.48,
+    "samples": 191
+  },
+  "lora_wav2vec2_combined_real": {
+    "wer": 0.5503,
+    "cer": 0.33,
+    "samples": 151
+  },
+  "lora_wav2vec2_combined_simulated": {
+    "wer": 0.6201,
+    "cer": 0.38,
+    "samples": 191
+  }
+}

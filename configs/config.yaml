@@ -122,7 +122,7 @@ peft:
 # ── Evaluation ───────────────────────────────────────────────
 evaluation:
   batch_size: 16
-  results_dir: "results"
+  results_dir: "/content/drive/MyDrive/ASR_Dissertation/results"
   metrics: ["wer", "cer"]
 
 # ── Experiments ──────────────────────────────────────────────
@@ -142,12 +142,6 @@ experiments:
   - name: "baseline_whisper_medium"
     model: "whisper"
     model_size: "openai/whisper-medium"
-    method: "baseline"
-    train_data: null
-
-  - name: "baseline_whisper_large"
-    model: "whisper"
-    model_size: "openai/whisper-large"
     method: "baseline"
     train_data: null
 
